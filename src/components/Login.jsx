@@ -34,11 +34,11 @@ const Login = ({ supabase }) => {
     setError(null);
 
     try {
-      // Generate a random username and ID for the guest
+      // Generate a random ID for the guest (without prefix)
       const guestId = uuidv4();
       const guestUsername = 'Guest_' + Math.random().toString(36).substring(2, 8);
       
-      // Store the guest ID for consistent reference
+      // Store the guest ID for consistent reference (without prefix)
       sessionStorage.setItem('guestId', guestId);
       
       // Create a temporary session without authentication
