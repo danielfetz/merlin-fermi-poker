@@ -33,7 +33,7 @@ const Lobby = ({ session, supabase }) => {
         if (session && session.user) {
           userId = session.user.id;
         } else if (sessionStorage.getItem('guestId')) {
-          userId = `guest-${sessionStorage.getItem('guestId')}`;
+          userId = sessionStorage.getItem('guestId'); // Use plain UUID without prefix
         } else {
           // Not authenticated and not a guest, redirect to login
           navigate('/login');
