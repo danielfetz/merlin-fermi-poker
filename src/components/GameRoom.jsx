@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Timer, Users, DollarSign, Award, PlusCircle, MinusCircle, Send, ArrowLeft, MessageCircle } from 'lucide-react';
 
-const GameRoom = ({ session, supabase }) => {
+const GameRoom = ({ session, supabase, guestUser }) => {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const chatEndRef = useRef(null);
@@ -23,12 +23,35 @@ const GameRoom = ({ session, supabase }) => {
   const [chat, setChat] = useState([]);
   const [chatMessage, setChatMessage] = useState('');
   const [showChat, setShowChat] = useState(false);
+  const [lastAction, setLastAction] = useState(null);
   
   // UI state
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   console.log("GameRoom component mounted with roomId:", roomId);
+
+  // Add a system message to the chat
+  const addSystemMessage = async (message) => {
+    try {
+      const { error } = await supabase
+        .from('room_chat')
+        .insert([
+          {
+            room_id: roomId,
+            user_id: null, // null user_id indicates system message
+            message: message,
+            is_system: true
+          }
+        ]);
+        
+      if (error) {
+        console.error('Error adding system message:', error);
+      }
+    } catch (error) {
+      console.error('Error adding system message:', error);
+    }
+  };
 
   // Debug function to identify the current player
   const debugCurrentPlayer = () => {
@@ -379,7 +402,8 @@ const GameRoom = ({ session, supabase }) => {
           {
             room_id: roomId,
             user_id: session?.user?.id || sessionStorage.getItem('guestId'),
-            message: chatMessage.trim()
+            message: chatMessage.trim(),
+            is_system: false
           }
         ]);
         
@@ -404,6 +428,9 @@ const GameRoom = ({ session, supabase }) => {
         .eq('id', currentUserPlayer.id);
         
       if (error) throw error;
+      
+      // Add system message that user submitted an answer
+      await addSystemMessage(`${currentUserPlayer.profiles.username} has submitted an answer.`);
       
       setUserAnswer('');
     } catch (error) {
@@ -442,17 +469,27 @@ const GameRoom = ({ session, supabase }) => {
       const currentPlayer = players[gameState.current_player_index];
       console.log("Taking action as player:", currentPlayer);
       
+      // Store the current player's username for the system message
+      const playerUsername = currentPlayer.profiles.username;
+      
       switch(action) {
         case 'fold':
           console.log("Folding");
+          
+          // Update player status to folded
           await supabase
             .from('room_players')
             .update({ folded: true })
             .eq('id', currentPlayer.id);
+          
+          // Add system message for fold action
+          await addSystemMessage(`${playerUsername} folds.`);
           break;
           
         case 'call':
           console.log("Calling");
+          
+          // Calculate call amount (difference between current bet and player's bet)
           const callAmount = Math.min(
             currentPlayer.chips, 
             gameState.current_bet - (currentPlayer.current_bet || 0)
@@ -460,25 +497,39 @@ const GameRoom = ({ session, supabase }) => {
           
           console.log(`Call amount: ${callAmount}`);
           
-          await supabase
-            .from('room_players')
-            .update({ 
-              chips: currentPlayer.chips - callAmount,
-              current_bet: (currentPlayer.current_bet || 0) + callAmount
-            })
-            .eq('id', currentPlayer.id);
+          if (callAmount === 0) {
+            // This is a check
+            await addSystemMessage(`${playerUsername} checks.`);
+          } else {
+            // Update player chips and current bet
+            await supabase
+              .from('room_players')
+              .update({ 
+                chips: currentPlayer.chips - callAmount,
+                current_bet: (currentPlayer.current_bet || 0) + callAmount
+              })
+              .eq('id', currentPlayer.id);
+              
+            // Update pot size in game state
+            await supabase
+              .from('game_states')
+              .update({ 
+                pot: gameState.pot + callAmount
+              })
+              .eq('id', gameState.id);
             
-          await supabase
-            .from('game_states')
-            .update({ 
-              pot: gameState.pot + callAmount
-            })
-            .eq('id', gameState.id);
+            // Add system message for call action
+            await addSystemMessage(`${playerUsername} calls $${callAmount}.`);
+          }
           break;
           
         case 'raise':
           console.log("Raising");
+          
+          // Calculate total bet after raise
           const totalRaise = gameState.current_bet + betAmount;
+          
+          // Calculate actual raise amount considering player's chips
           const raiseAmount = Math.min(
             currentPlayer.chips,
             totalRaise - (currentPlayer.current_bet || 0)
@@ -486,6 +537,7 @@ const GameRoom = ({ session, supabase }) => {
           
           console.log(`Raise amount: ${raiseAmount}, new bet: ${totalRaise}`);
           
+          // Update player chips and current bet
           await supabase
             .from('room_players')
             .update({ 
@@ -494,6 +546,7 @@ const GameRoom = ({ session, supabase }) => {
             })
             .eq('id', currentPlayer.id);
             
+          // Update pot and current bet in game state
           await supabase
             .from('game_states')
             .update({ 
@@ -501,12 +554,21 @@ const GameRoom = ({ session, supabase }) => {
               current_bet: (currentPlayer.current_bet || 0) + raiseAmount
             })
             .eq('id', gameState.id);
+          
+          // Add system message for raise action
+          await addSystemMessage(`${playerUsername} raises to $${(currentPlayer.current_bet || 0) + raiseAmount}.`);
           break;
           
         default:
           console.log("Unknown action");
           return;
       }
+      
+      // Track last action for UI feedback
+      setLastAction({
+        player: currentPlayer.id,
+        action: action
+      });
       
       // Move to next player or next stage
       console.log("Moving to next player");
@@ -548,7 +610,7 @@ const GameRoom = ({ session, supabase }) => {
       // Get current bet from game state
       const { data: currentGameState, error: gameStateError } = await supabase
         .from('game_states')
-        .select('current_bet')
+        .select('current_bet, current_player_index')
         .eq('id', gameState.id)
         .single();
         
@@ -561,7 +623,7 @@ const GameRoom = ({ session, supabase }) => {
       
       // Check if everyone has called or folded
       const everyoneActed = activePlayers.every(p => 
-        p.folded || p.current_bet === currentBet
+        p.current_bet === currentBet
       );
       
       console.log("Current bet:", currentBet);
@@ -569,17 +631,20 @@ const GameRoom = ({ session, supabase }) => {
       console.log("Player bets:", activePlayers.map(p => ({ 
         id: p.id, 
         username: players.find(player => player.id === p.id)?.profiles?.username,
-        bet: p.current_bet 
+        bet: p.current_bet,
+        folded: p.folded
       })));
       
       if (everyoneActed) {
         console.log("Everyone has acted, moving to next stage");
+        await addSystemMessage("All players have acted. Moving to next phase.");
         await moveToNextStage();
         return;
       }
       
       // Find the next player who hasn't folded
-      let nextPlayerIndex = (gameState.current_player_index + 1) % freshPlayers.length;
+      const currentIndex = currentGameState.current_player_index;
+      let nextPlayerIndex = (currentIndex + 1) % freshPlayers.length;
       console.log("Initial next player index:", nextPlayerIndex);
       
       // Skip folded players
@@ -589,6 +654,10 @@ const GameRoom = ({ session, supabase }) => {
       }
       
       console.log("Final next player index:", nextPlayerIndex);
+      
+      // Add system message for next player's turn
+      const nextPlayerUsername = players.find(p => p.id === freshPlayers[nextPlayerIndex].id)?.profiles?.username || 'Unknown Player';
+      await addSystemMessage(`${nextPlayerUsername}'s turn.`);
       
       // Update the current player
       await supabase
@@ -614,34 +683,44 @@ const GameRoom = ({ session, supabase }) => {
       switch(gameState.current_stage) {
         case 'question':
           nextStage = 'betting1';
+          await addSystemMessage("Question phase ended. First betting round begins!");
           break;
         case 'betting1':
           nextStage = 'hint1';
+          await addSystemMessage("First betting round completed. Revealing first hint...");
           break;
         case 'hint1':
           nextStage = 'betting2';
+          await addSystemMessage("Second betting round begins!");
           break;
         case 'betting2':
           nextStage = 'hint2';
+          await addSystemMessage("Second betting round completed. Revealing second hint...");
           break;
         case 'hint2':
           nextStage = 'betting3';
+          await addSystemMessage("Final betting round begins!");
           break;
         case 'betting3':
           nextStage = 'reveal';
+          await addSystemMessage("Betting completed. Revealing the correct answer...");
           break;
         case 'reveal':
           nextStage = 'betting4';
+          await addSystemMessage("Final betting round after reveal begins!");
           break;
         case 'betting4':
           nextStage = 'results';
+          await addSystemMessage("Final betting round completed. Determining the winner...");
           break;
         case 'results':
           // Start a new round
+          await addSystemMessage("Starting a new round...");
           return await startNewRound();
         default:
           nextStage = 'question';
           nextTimerEnd = new Date(Date.now() + 60000).toISOString();
+          await addSystemMessage("Starting new question phase. You have 60 seconds to submit your answer!");
       }
       
       // Reset bets for new betting rounds
@@ -705,6 +784,9 @@ const GameRoom = ({ session, supabase }) => {
           .from('profiles')
           .update({ games_won: winner.profiles.games_won + 1 })
           .eq('id', winner.user_id);
+          
+        // Add system message about winner
+        await addSystemMessage(`${winner.profiles.username} wins the pot of $${gameState.pot} by default! Everyone else folded.`);
       } else {
         // Find player with closest answer
         let closestPlayer = null;
@@ -735,6 +817,9 @@ const GameRoom = ({ session, supabase }) => {
             .from('profiles')
             .update({ games_won: closestPlayer.profiles.games_won + 1 })
             .eq('id', closestPlayer.user_id);
+            
+          // Add system message about winner
+          await addSystemMessage(`${closestPlayer.profiles.username} wins the pot of $${gameState.pot} with the closest answer: ${closestPlayer.answer}!`);
         }
       }
       
@@ -787,6 +872,9 @@ const GameRoom = ({ session, supabase }) => {
         })
         .eq('id', sortedPlayers[0].id);
       
+      // Add system message for small blind
+      await addSystemMessage(`${sortedPlayers[0].profiles.username} posts small blind of $${room.small_blind}.`);
+      
       // Big blind
       await supabase
         .from('room_players')
@@ -795,6 +883,9 @@ const GameRoom = ({ session, supabase }) => {
           current_bet: room.big_blind
         })
         .eq('id', sortedPlayers[1].id);
+        
+      // Add system message for big blind
+      await addSystemMessage(`${sortedPlayers[1].profiles.username} posts big blind of $${room.big_blind}.`);
       
       // Update game state for new round
       await supabase
@@ -808,6 +899,9 @@ const GameRoom = ({ session, supabase }) => {
           timer_end: new Date(Date.now() + 60000).toISOString()
         })
         .eq('id', gameState.id);
+        
+      // Add system message for new round
+      await addSystemMessage("New round started! You have 60 seconds to answer the question.");
     } catch (error) {
       console.error('Error starting new round:', error);
       setError('Failed to start new round');
@@ -830,6 +924,9 @@ const GameRoom = ({ session, supabase }) => {
           .from('rooms')
           .update({ status: 'completed' })
           .eq('id', roomId);
+          
+        // Add system message that host ended the game
+        await addSystemMessage("The host has ended the game.");
       } else {
         // Just remove current player
         await supabase
@@ -842,6 +939,9 @@ const GameRoom = ({ session, supabase }) => {
           .from('rooms')
           .update({ current_players: room.current_players - 1 })
           .eq('id', roomId);
+          
+        // Add system message that player left
+        await addSystemMessage(`${currentUserPlayer.profiles.username} has left the game.`);
       }
       
       navigate('/');
@@ -915,54 +1015,73 @@ const GameRoom = ({ session, supabase }) => {
         </div>
         
         {/* Players positioned around the table */}
-        {players.map((player, index) => (
-          <div 
-            key={player.id} 
-            className="absolute"
-            style={getPlayerPosition(index, players.length)}
-          >
-            <div className={`p-3 rounded-lg shadow-md w-64 ${
-              player.folded 
-                ? 'bg-gray-700 bg-opacity-70 text-gray-400' 
-                : gameState?.current_player_index === index && gameState?.current_stage.includes('betting')
-                  ? 'bg-blue-700 bg-opacity-90' 
-                  : 'bg-gray-800 bg-opacity-90'
-            }`}>
-              <div className="flex justify-between items-center">
-                <div>
-                  <div className="font-bold flex items-center">
-                    {player.user_id === (session?.user?.id || sessionStorage.getItem('guestId')) && (
-                      <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+        {players.map((player, index) => {
+          const isCurrentTurn = gameState?.current_player_index === index && 
+                                gameState?.current_stage.includes('betting');
+          
+          const isLastAction = lastAction?.player === player.id;
+          
+          // Calculate player status styling
+          let statusBg = player.folded ? 'bg-gray-700 bg-opacity-70 text-gray-400' : 
+                         isCurrentTurn ? 'bg-blue-700 bg-opacity-90' : 'bg-gray-800 bg-opacity-90';
+          
+          // Add visual indication of last action
+          if (isLastAction && !player.folded) {
+            if (lastAction.action === 'fold') statusBg = 'bg-red-800 bg-opacity-60';
+            else if (lastAction.action === 'call') statusBg = 'bg-blue-800 bg-opacity-60';
+            else if (lastAction.action === 'raise') statusBg = 'bg-green-800 bg-opacity-60';
+          }
+          
+          return (
+            <div 
+              key={player.id} 
+              className="absolute"
+              style={getPlayerPosition(index, players.length)}
+            >
+              <div className={`p-3 rounded-lg shadow-md w-64 ${statusBg}`}>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="font-bold flex items-center">
+                      {player.user_id === (session?.user?.id || sessionStorage.getItem('guestId')) && (
+                        <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                      )}
+                      {player.profiles?.username || 'Unknown Player'}
+                      {player.is_host && (
+                        <span className="ml-2 text-xs text-yellow-400">(Host)</span>
+                      )}
+                    </div>
+                    <div className="text-sm flex items-center">
+                      <DollarSign size={14} className="mr-1 text-yellow-400" />
+                      {player.chips}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    {player.folded && <span className="text-sm text-red-400">Folded</span>}
+                    {!player.folded && player.current_bet > 0 && (
+                      <div className="text-sm text-blue-300 flex items-center justify-end">
+                        <span>Bet: ${player.current_bet}</span>
+                      </div>
                     )}
-                    {player.profiles?.username || 'Unknown Player'}
-                    {player.is_host && (
-                      <span className="ml-2 text-xs text-yellow-400">(Host)</span>
+                    {isCurrentTurn && (
+                      <div className="mt-1">
+                        <span className="px-2 py-1 bg-blue-900 text-blue-200 text-xs rounded animate-pulse">
+                          Current Turn
+                        </span>
+                      </div>
+                    )}
+                    {player.answer !== null && (
+                      <div className="mt-1">
+                        <span className="px-2 py-1 bg-green-800 text-green-200 text-xs rounded">
+                          Answer Ready
+                        </span>
+                      </div>
                     )}
                   </div>
-                  <div className="text-sm flex items-center">
-                    <DollarSign size={14} className="mr-1 text-yellow-400" />
-                    {player.chips}
-                  </div>
-                </div>
-                <div className="text-right">
-                  {player.folded && <span className="text-sm text-red-400">Folded</span>}
-                  {!player.folded && player.current_bet > 0 && (
-                    <div className="text-sm text-blue-300 flex items-center justify-end">
-                      <span>Bet: ${player.current_bet}</span>
-                    </div>
-                  )}
-                  {player.answer !== null && (
-                    <div className="mt-1">
-                      <span className="px-2 py-1 bg-green-800 text-green-200 text-xs rounded">
-                        Answer Ready
-                      </span>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -1032,6 +1151,34 @@ const GameRoom = ({ session, supabase }) => {
                 <Timer className="mr-2 text-red-400" size={16} />
                 <span className="font-mono text-white">{timeRemaining} seconds remaining</span>
               </div>
+              
+              {currentUserPlayer && currentUserPlayer.answer === null && (
+                <div className="mt-3 max-w-sm mx-auto">
+                  <div className="flex space-x-2">
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="flex-1 px-4 py-2 text-white bg-gray-700 border border-gray-600 rounded-md focus:outline-none"
+                      placeholder="Your answer"
+                      value={userAnswer}
+                      onChange={(e) => setUserAnswer(e.target.value)}
+                    />
+                    <button
+                      className="px-4 py-2 bg-green-600 text-white rounded flex items-center"
+                      onClick={submitAnswer}
+                    >
+                      <Send size={18} className="mr-1" />
+                      Submit
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {currentUserPlayer && currentUserPlayer.answer !== null && (
+                <div className="mt-3 bg-green-900 bg-opacity-50 p-2 rounded-lg inline-block">
+                  <p className="text-green-200">Your answer has been submitted!</p>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -1235,15 +1382,19 @@ const GameRoom = ({ session, supabase }) => {
               <div 
                 key={message.id} 
                 className={`p-2 rounded max-w-xs ${
-                  message.user_id === (session?.user?.id || sessionStorage.getItem('guestId'))
-                    ? 'ml-auto bg-blue-700 text-white'
-                    : 'bg-gray-700 text-white'
+                  message.is_system
+                    ? 'mx-auto bg-gray-600 text-gray-200 italic text-xs' 
+                    : message.user_id === (session?.user?.id || sessionStorage.getItem('guestId'))
+                      ? 'ml-auto bg-blue-700 text-white'
+                      : 'bg-gray-700 text-white'
                 }`}
               >
-                <div className="text-xs opacity-75 mb-1">
-                  {message.profiles?.username || 'Unknown User'}
-                </div>
-                <div className="text-sm">{message.message}</div>
+                {!message.is_system && (
+                  <div className="text-xs opacity-75 mb-1">
+                    {message.profiles?.username || 'Unknown User'}
+                  </div>
+                )}
+                <div className={message.is_system ? "text-center" : "text-sm"}>{message.message}</div>
               </div>
             ))}
             <div ref={chatEndRef} />
@@ -1304,10 +1455,14 @@ const GameRoom = ({ session, supabase }) => {
           <div className="flex items-center space-x-4">
             <button
               onClick={() => setShowChat(!showChat)}
-              className="flex items-center px-3 py-1 text-sm bg-gray-700 rounded hover:bg-gray-600"
+              className="flex items-center px-3 py-1 text-sm bg-gray-700 rounded hover:bg-gray-600 relative"
             >
               <MessageCircle size={18} className="mr-1" />
               Chat
+              {/* Optional: Add a badge for unread messages */}
+              {chat.length > 0 && !showChat && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full"></span>
+              )}
             </button>
             <button
               onClick={leaveGame}
@@ -1323,25 +1478,6 @@ const GameRoom = ({ session, supabase }) => {
         
         {/* Player Controls */}
         <div className="fixed bottom-0 left-0 right-0 bg-gray-800 p-4">
-          {gameState?.current_stage === 'question' && currentUserPlayer?.answer === null && (
-            <div className="flex space-x-2 max-w-md mx-auto">
-              <input
-                type="number"
-                step="0.01"
-                className="flex-1 px-4 py-2 text-white bg-gray-700 border border-gray-600 rounded-md focus:outline-none"
-                placeholder="Your answer"
-                value={userAnswer}
-                onChange={(e) => setUserAnswer(e.target.value)}
-              />
-              <button
-                className="px-4 py-2 bg-green-600 text-white rounded flex items-center"
-                onClick={submitAnswer}
-              >
-                <Send size={18} className="mr-1" />
-                Submit
-              </button>
-            </div>
-          )}
           
           {/* Add a message showing whose turn it is */}
           {gameState?.current_stage.includes('betting') && gameState?.current_player_index !== undefined && (
@@ -1394,9 +1530,8 @@ const GameRoom = ({ session, supabase }) => {
                 <button 
                   className="py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
                   onClick={() => playerAction('call')}
-                  disabled={gameState.current_bet === 0}
                 >
-                  {gameState.current_bet === 0 ? 'Check' : 'Call'}
+                  {gameState.current_bet === 0 || gameState.current_bet === currentUserPlayer?.current_bet ? 'Check' : 'Call'}
                 </button>
                 <button 
                   className="py-2 bg-green-600 text-white rounded hover:bg-green-700"
@@ -1408,23 +1543,6 @@ const GameRoom = ({ session, supabase }) => {
               </div>
             </div>
           )}
-          
-          {/* Debug information - uncomment for testing */}
-          {/*
-          <div className="mt-4 p-2 bg-black text-xs text-gray-400 rounded">
-            <p>Game stage: {gameState?.current_stage}</p>
-            <p>Current player index: {gameState?.current_player_index}</p>
-            <p>Current user ID: {session?.user?.id || sessionStorage.getItem('guestId')}</p>
-            <p>Current player ID: {players[gameState?.current_player_index]?.user_id}</p>
-            <p>Show controls: {String(
-              gameState?.current_stage.includes('betting') && 
-              gameState?.current_player_index !== undefined &&
-              players.length > 0 &&
-              gameState.current_player_index < players.length &&
-              players[gameState.current_player_index]?.user_id === (session?.user?.id || sessionStorage.getItem('guestId'))
-            )}</p>
-          </div>
-          */}
         </div>
         
         {/* Chat Sidebar */}
