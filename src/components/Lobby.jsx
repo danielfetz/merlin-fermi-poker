@@ -28,8 +28,17 @@ const Lobby = ({ session, supabase }) => {
         if (roomError) throw roomError;
         setRoom(roomData);
 
-        // Determine user ID (regular or guest)
-        const userId = session?.user?.id || `guest-${sessionStorage.getItem('guestId')}`;
+        // Determine user ID - regular user or guest
+        let userId;
+        if (session && session.user) {
+          userId = session.user.id;
+        } else if (sessionStorage.getItem('guestId')) {
+          userId = `guest-${sessionStorage.getItem('guestId')}`;
+        } else {
+          // Not authenticated and not a guest, redirect to login
+          navigate('/login');
+          return;
+        }
 
         // Get players in the room
         const { data: playersData, error: playersError } = await supabase
