@@ -83,22 +83,27 @@ const CreateRoom = ({ session, guestUser, supabase }) => {
         status: 'waiting'
       };
       
-      // If this is a guest user, we'll use metadata to store additional info
-      if (guestUser) {
+      // If this is a guest user, add metadata
+      if (!session || !session.user) {
         playerData.metadata = { 
           username: username,
           isGuest: true
         };
       }
       
+      console.log("Creating player record:", playerData);
+      
       const { error: playerError } = await supabase
         .from('room_players')
         .insert([playerData]);
 
-      if (playerError) throw playerError;
+      if (playerError) {
+        console.error("Error creating player:", playerError);
+        throw playerError;
+      }
 
       // If guest user, store room info in session storage
-      if (guestUser) {
+      if (!session || !session.user) {
         const guestRooms = JSON.parse(sessionStorage.getItem('guestRooms') || '[]');
         guestRooms.push({
           id: room.id,
@@ -107,6 +112,8 @@ const CreateRoom = ({ session, guestUser, supabase }) => {
         sessionStorage.setItem('guestRooms', JSON.stringify(guestRooms));
       }
 
+      console.log("Room created successfully, navigating to lobby:", room.id);
+      
       // Redirect to the lobby
       navigate(`/lobby/${room.id}`);
     } catch (error) {
