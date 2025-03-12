@@ -42,16 +42,18 @@ const Login = ({ supabase }) => {
       sessionStorage.setItem('guestId', guestId);
       
       // Create a temporary session without authentication
-      sessionStorage.setItem('guestUser', JSON.stringify({
+      const guestData = {
         username: guestUsername,
         isGuest: true,
         chips_balance: 1000,
         games_played: 0,
         games_won: 0
-      }));
+      };
       
-      // Navigate to the home page
-      navigate('/');
+      sessionStorage.setItem('guestUser', JSON.stringify(guestData));
+      
+      // Force a page reload to ensure the App component picks up the guest user
+      window.location.href = '/';
     } catch (error) {
       setError('Failed to login as guest');
     } finally {
