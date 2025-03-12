@@ -53,8 +53,7 @@ function App() {
   }
 
   // Consider the user authenticated if they have a session OR are a guest
-  const isAuthenticated = session || sessionStorage.getItem('guestUser');
-  const guestUser = sessionStorage.getItem('guestUser') ? JSON.parse(sessionStorage.getItem('guestUser')) : null;
+  const isAuthenticated = session || guestUser;
 
   return (
     <Router>
