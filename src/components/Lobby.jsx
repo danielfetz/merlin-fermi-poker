@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Copy, Users, DollarSign, ChevronDown, ChevronUp, PlayCircle, Share2 } from 'lucide-react';
 
-const Lobby = ({ session, supabase }) => {
+const Lobby = ({ session, guestUser, supabase }) => {
   const { roomId } = useParams();
   const navigate = useNavigate();
   
@@ -15,9 +15,18 @@ const Lobby = ({ session, supabase }) => {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
 
+  console.log("Lobby component mounted with roomId:", roomId);
+  console.log("Session:", session);
+  console.log("Guest user:", guestUser);
+
   useEffect(() => {
+    console.log("Lobby useEffect running");
+    
     const fetchRoomData = async () => {
+      console.log("Beginning fetchRoomData function");
       try {
+        console.log("Fetching room data for ID:", roomId);
+        
         // Get room details
         const { data: roomData, error: roomError } = await supabase
           .from('rooms')
@@ -25,58 +34,111 @@ const Lobby = ({ session, supabase }) => {
           .eq('id', roomId)
           .single();
 
-        if (roomError) throw roomError;
+        if (roomError) {
+          console.error("Room error:", roomError);
+          throw roomError;
+        }
+        
+        console.log("Room data successfully retrieved:", roomData);
         setRoom(roomData);
 
         // Determine user ID - regular user or guest
         let userId;
         if (session && session.user) {
           userId = session.user.id;
+          console.log("Using authenticated user ID:", userId);
         } else if (sessionStorage.getItem('guestId')) {
           userId = sessionStorage.getItem('guestId'); // Use plain UUID without prefix
+          console.log("Using guest user ID:", userId);
         } else {
           // Not authenticated and not a guest, redirect to login
+          console.error("No user ID found - not authenticated and not guest");
           navigate('/login');
           return;
         }
 
         // Get players in the room
+        console.log("Fetching players for room:", roomId);
         const { data: playersData, error: playersError } = await supabase
           .from('room_players')
-          .select(`
-            *,
-            profiles:user_id (username)
-          `)
-          .eq('room_id', roomId)
-          .order('seat_position', { ascending: true });
+          .select('*')
+          .eq('room_id', roomId);
 
-        if (playersError) throw playersError;
+        if (playersError) {
+          console.error("Players error:", playersError);
+          throw playersError;
+        }
         
-        // Process player data - for guest users, get username from metadata
-        const processedPlayers = playersData.map(player => {
-          // If player has metadata with username (guest), use that
-          if (player.metadata && player.metadata.username) {
-            return {
-              ...player,
-              profiles: { username: player.metadata.username }
-            };
-          }
-          return player;
+        console.log("Players data successfully retrieved:", playersData);
+        
+        // Get usernames for each player
+        const enhancedPlayers = await Promise.all(
+          playersData.map(async (player) => {
+            // Check if player has metadata (guest)
+            if (player.metadata && player.metadata.username) {
+              console.log("Player is a guest with metadata:", player.metadata);
+              return {
+                ...player,
+                profiles: { username: player.metadata.username }
+              };
+            } 
+            // Otherwise fetch username from profiles
+            else {
+              try {
+                const { data: profileData, error: profileError } = await supabase
+                  .from('profiles')
+                  .select('username')
+                  .eq('id', player.user_id)
+                  .single();
+                
+                if (profileError) {
+                  console.error("Error fetching profile for user:", player.user_id, profileError);
+                  return {
+                    ...player,
+                    profiles: { username: 'Unknown User' }
+                  };
+                }
+                
+                return {
+                  ...player,
+                  profiles: { username: profileData.username }
+                };
+              } catch (e) {
+                console.error("Error in profile fetch:", e);
+                return {
+                  ...player,
+                  profiles: { username: 'Unknown User' }
+                };
+              }
+            }
+          })
+        );
+        
+        console.log("Enhanced players data:", enhancedPlayers);
+        setPlayers(enhancedPlayers);
+
+        console.log("Current user ID:", userId);
+        console.log("Looking for user in players...");
+        
+        // Check if current user is in this room
+        const currentPlayer = enhancedPlayers.find(player => {
+          console.log("Comparing player ID:", player.user_id, "with user ID:", userId);
+          return player.user_id === userId;
         });
         
-        setPlayers(processedPlayers);
-
-        // Check if current user is the host
-        const currentPlayer = processedPlayers.find(player => player.user_id === userId);
         if (currentPlayer) {
+          console.log("Current player found:", currentPlayer);
           setIsHost(currentPlayer.is_host);
         } else {
+          console.warn("User not found in room players - redirecting to home");
           // User is not in this room, redirect to home
           navigate('/');
+          return;
         }
 
         // Check if game has already started
         if (roomData.status === 'in_progress') {
+          console.log("Game in progress - redirecting to game room");
           navigate(`/game/${roomId}`);
         }
       } catch (error) {
@@ -92,6 +154,7 @@ const Lobby = ({ session, supabase }) => {
     fetchRoomData();
 
     // Set up subscriptions for real-time updates
+    console.log("Setting up real-time subscriptions");
     const playersSubscription = supabase
       .channel(`room_players:${roomId}`)
       .on('postgres_changes', {
@@ -100,6 +163,7 @@ const Lobby = ({ session, supabase }) => {
         table: 'room_players',
         filter: `room_id=eq.${roomId}`
       }, (payload) => {
+        console.log("Room players change detected:", payload);
         fetchRoomData();
       })
       .subscribe();
@@ -112,6 +176,7 @@ const Lobby = ({ session, supabase }) => {
         table: 'rooms',
         filter: `id=eq.${roomId}`
       }, (payload) => {
+        console.log("Room data change detected:", payload);
         if (payload.new.status === 'in_progress') {
           navigate(`/game/${roomId}`);
         } else {
@@ -121,12 +186,14 @@ const Lobby = ({ session, supabase }) => {
       .subscribe();
 
     return () => {
+      console.log("Cleaning up subscriptions");
       supabase.removeChannel(playersSubscription);
       supabase.removeChannel(roomSubscription);
     };
-  }, [roomId, session, supabase, navigate]);
+  }, [roomId, session, supabase, navigate, guestUser]);
 
   const handleStartGame = async () => {
+    console.log("handleStartGame called");
     if (!isHost) return;
 
     try {
@@ -136,6 +203,7 @@ const Lobby = ({ session, supabase }) => {
         return;
       }
 
+      console.log("Updating room status to in_progress");
       // Update room status to in_progress
       const { error: updateError } = await supabase
         .from('rooms')
@@ -144,6 +212,7 @@ const Lobby = ({ session, supabase }) => {
 
       if (updateError) throw updateError;
 
+      console.log("Initializing game state");
       // Initialize the game state
       const { error: gameStateError } = await supabase
         .from('game_states')
@@ -160,6 +229,7 @@ const Lobby = ({ session, supabase }) => {
 
       if (gameStateError) throw gameStateError;
 
+      console.log("Navigating to game");
       // Navigate to game
       navigate(`/game/${roomId}`);
     } catch (error) {
@@ -169,8 +239,10 @@ const Lobby = ({ session, supabase }) => {
   };
 
   const handleLeaveRoom = async () => {
+    console.log("handleLeaveRoom called");
     try {
       if (isHost) {
+        console.log("Host is leaving - closing room");
         // If host leaves, close the room
         const { error: closeRoomError } = await supabase
           .from('rooms')
@@ -179,12 +251,23 @@ const Lobby = ({ session, supabase }) => {
 
         if (closeRoomError) throw closeRoomError;
       } else {
+        console.log("Player is leaving - removing from room");
+        // Get user ID
+        let userId;
+        if (session && session.user) {
+          userId = session.user.id;
+        } else if (sessionStorage.getItem('guestId')) {
+          userId = sessionStorage.getItem('guestId');
+        } else {
+          throw new Error("No user ID available");
+        }
+        
         // Remove player from room
         const { error: removePlayerError } = await supabase
           .from('room_players')
           .delete()
           .eq('room_id', roomId)
-          .eq('user_id', session.user.id);
+          .eq('user_id', userId);
 
         if (removePlayerError) throw removePlayerError;
 
@@ -199,6 +282,7 @@ const Lobby = ({ session, supabase }) => {
         if (updateRoomError) throw updateRoomError;
       }
 
+      console.log("Navigation back to home");
       // Navigate back to home
       navigate('/');
     } catch (error) {
@@ -216,6 +300,7 @@ const Lobby = ({ session, supabase }) => {
   };
 
   if (loading) {
+    console.log("Lobby is in loading state");
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-900">
         <div className="text-white">Loading lobby...</div>
@@ -224,6 +309,7 @@ const Lobby = ({ session, supabase }) => {
   }
 
   if (error) {
+    console.log("Lobby has error:", error);
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900">
         <div className="p-4 mb-4 text-red-700 bg-red-100 rounded-lg">
@@ -236,6 +322,7 @@ const Lobby = ({ session, supabase }) => {
     );
   }
 
+  console.log("Rendering full lobby UI");
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       <div className="container p-4 mx-auto">
