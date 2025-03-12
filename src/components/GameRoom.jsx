@@ -30,6 +30,38 @@ const GameRoom = ({ session, supabase }) => {
 
   console.log("GameRoom component mounted with roomId:", roomId);
 
+  // Debug function to identify the current player
+  const debugCurrentPlayer = () => {
+    if (!gameState || gameState.current_player_index === undefined || !players || players.length === 0) {
+      console.log("Cannot debug current player - missing data");
+      return;
+    }
+    
+    const currentPlayerIndex = gameState.current_player_index;
+    console.log("Current player index:", currentPlayerIndex);
+    
+    if (currentPlayerIndex >= players.length) {
+      console.error("Invalid player index - exceeds players array length");
+      return;
+    }
+    
+    const currentPlayer = players[currentPlayerIndex];
+    console.log("Current player:", currentPlayer);
+    
+    // Get current user ID
+    const currentUserId = session?.user?.id || sessionStorage.getItem('guestId');
+    console.log("Current user ID:", currentUserId);
+    console.log("Is current user's turn:", currentPlayer?.user_id === currentUserId);
+    
+    // Log all players for comparison
+    console.log("All players:", players.map(p => ({
+      id: p.id,
+      user_id: p.user_id,
+      username: p.profiles?.username,
+      is_current: p.user_id === currentUserId
+    })));
+  };
+
   // Fetch initial data and set up subscriptions
   const fetchGameData = async () => {
     try {
@@ -166,7 +198,7 @@ const GameRoom = ({ session, supabase }) => {
             console.error("Question error:", questionError);
             // Continue without a question, we'll show appropriate UI
           } else {
-            console.log("Question data:", questionData);
+            console.log("Question data loaded:", questionData);
             setCurrentQuestion(questionData);
           }
         }
@@ -278,6 +310,13 @@ const GameRoom = ({ session, supabase }) => {
     };
   }, [loading]); // Only dependency is loading state
 
+  // Call debugCurrentPlayer whenever game state changes
+  useEffect(() => {
+    if (gameState && players.length > 0) {
+      debugCurrentPlayer();
+    }
+  }, [gameState, players]);
+
   // Timer effect for the question phase
   useEffect(() => {
     let interval = null;
@@ -375,19 +414,37 @@ const GameRoom = ({ session, supabase }) => {
 
   // Player actions during betting rounds
   const playerAction = async (action) => {
+    console.log(`Player action: ${action} by user ${session?.user?.id || sessionStorage.getItem('guestId')}`);
+    
     try {
       // Only allow the current player to act
-      if (
-        !gameState?.current_stage.includes('betting') || 
-        players[gameState.current_player_index]?.user_id !== (session?.user?.id || sessionStorage.getItem('guestId'))
-      ) {
+      if (!gameState?.current_stage.includes('betting')) {
+        console.log("Not in betting stage, cannot take action");
+        return;
+      }
+      
+      if (gameState.current_player_index === undefined || gameState.current_player_index >= players.length) {
+        console.log("Invalid current player index");
+        return;
+      }
+      
+      const currentPlayerId = players[gameState.current_player_index]?.user_id;
+      const currentUserId = session?.user?.id || sessionStorage.getItem('guestId');
+      
+      console.log("Current player ID:", currentPlayerId);
+      console.log("Current user ID:", currentUserId);
+      
+      if (currentPlayerId !== currentUserId) {
+        console.log("Not your turn");
         return;
       }
       
       const currentPlayer = players[gameState.current_player_index];
+      console.log("Taking action as player:", currentPlayer);
       
       switch(action) {
         case 'fold':
+          console.log("Folding");
           await supabase
             .from('room_players')
             .update({ folded: true })
@@ -395,10 +452,13 @@ const GameRoom = ({ session, supabase }) => {
           break;
           
         case 'call':
+          console.log("Calling");
           const callAmount = Math.min(
             currentPlayer.chips, 
             gameState.current_bet - (currentPlayer.current_bet || 0)
           );
+          
+          console.log(`Call amount: ${callAmount}`);
           
           await supabase
             .from('room_players')
@@ -417,11 +477,14 @@ const GameRoom = ({ session, supabase }) => {
           break;
           
         case 'raise':
+          console.log("Raising");
           const totalRaise = gameState.current_bet + betAmount;
           const raiseAmount = Math.min(
             currentPlayer.chips,
             totalRaise - (currentPlayer.current_bet || 0)
           );
+          
+          console.log(`Raise amount: ${raiseAmount}, new bet: ${totalRaise}`);
           
           await supabase
             .from('room_players')
@@ -441,10 +504,12 @@ const GameRoom = ({ session, supabase }) => {
           break;
           
         default:
+          console.log("Unknown action");
           return;
       }
       
       // Move to next player or next stage
+      console.log("Moving to next player");
       await moveToNextPlayer();
     } catch (error) {
       console.error('Error performing action:', error);
@@ -454,36 +519,84 @@ const GameRoom = ({ session, supabase }) => {
 
   // Move to the next player in the betting round
   const moveToNextPlayer = async () => {
+    console.log("moveToNextPlayer called");
+    
     try {
-      const activePlayers = players.filter(p => !p.folded);
+      // Get fresh data for accuracy
+      const { data: freshPlayers, error: playersError } = await supabase
+        .from('room_players')
+        .select('*')
+        .eq('room_id', roomId)
+        .order('seat_position', { ascending: true });
+        
+      if (playersError) {
+        console.error("Error fetching fresh player data:", playersError);
+        throw playersError;
+      }
+      
+      // Filter to active players
+      const activePlayers = freshPlayers.filter(p => !p.folded);
+      console.log("Active players:", activePlayers);
       
       // If only one player remains, end the round
       if (activePlayers.length <= 1) {
+        console.log("Only one active player, ending round");
         await moveToNextStage();
         return;
       }
       
+      // Get current bet from game state
+      const { data: currentGameState, error: gameStateError } = await supabase
+        .from('game_states')
+        .select('current_bet')
+        .eq('id', gameState.id)
+        .single();
+        
+      if (gameStateError) {
+        console.error("Error fetching current game state:", gameStateError);
+        throw gameStateError;
+      }
+      
+      const currentBet = currentGameState.current_bet;
+      
       // Check if everyone has called or folded
-      const everyoneActed = activePlayers.every(
-        p => p.folded || p.current_bet === gameState.current_bet
+      const everyoneActed = activePlayers.every(p => 
+        p.folded || p.current_bet === currentBet
       );
       
+      console.log("Current bet:", currentBet);
+      console.log("Everyone acted:", everyoneActed);
+      console.log("Player bets:", activePlayers.map(p => ({ 
+        id: p.id, 
+        username: players.find(player => player.id === p.id)?.profiles?.username,
+        bet: p.current_bet 
+      })));
+      
       if (everyoneActed) {
+        console.log("Everyone has acted, moving to next stage");
         await moveToNextStage();
         return;
       }
       
       // Find the next player who hasn't folded
-      let nextPlayerIndex = (gameState.current_player_index + 1) % players.length;
-      while (players[nextPlayerIndex].folded) {
-        nextPlayerIndex = (nextPlayerIndex + 1) % players.length;
+      let nextPlayerIndex = (gameState.current_player_index + 1) % freshPlayers.length;
+      console.log("Initial next player index:", nextPlayerIndex);
+      
+      // Skip folded players
+      while (freshPlayers[nextPlayerIndex].folded) {
+        console.log(`Player ${nextPlayerIndex} has folded, skipping`);
+        nextPlayerIndex = (nextPlayerIndex + 1) % freshPlayers.length;
       }
+      
+      console.log("Final next player index:", nextPlayerIndex);
       
       // Update the current player
       await supabase
         .from('game_states')
         .update({ current_player_index: nextPlayerIndex })
         .eq('id', gameState.id);
+        
+      console.log("Updated current player index to:", nextPlayerIndex);
     } catch (error) {
       console.error('Error moving to next player:', error);
     }
@@ -1230,8 +1343,22 @@ const GameRoom = ({ session, supabase }) => {
             </div>
           )}
           
+          {/* Add a message showing whose turn it is */}
+          {gameState?.current_stage.includes('betting') && gameState?.current_player_index !== undefined && (
+            <div className="text-center text-white mb-2">
+              <p>
+                {players[gameState.current_player_index]?.profiles?.username || 'Unknown Player'}'s turn
+                {players[gameState.current_player_index]?.user_id === (session?.user?.id || sessionStorage.getItem('guestId')) && 
+                  " - Your turn to bet!"}
+              </p>
+            </div>
+          )}
+          
+          {/* Improved betting controls with additional debugging */}
           {gameState?.current_stage.includes('betting') && 
            gameState?.current_player_index !== undefined &&
+           players.length > 0 &&
+           gameState.current_player_index < players.length &&
            players[gameState.current_player_index]?.user_id === (session?.user?.id || sessionStorage.getItem('guestId')) && (
             <div className="max-w-md mx-auto">
               <div className="flex justify-between items-center mb-2">
@@ -1281,6 +1408,23 @@ const GameRoom = ({ session, supabase }) => {
               </div>
             </div>
           )}
+          
+          {/* Debug information - uncomment for testing */}
+          {/*
+          <div className="mt-4 p-2 bg-black text-xs text-gray-400 rounded">
+            <p>Game stage: {gameState?.current_stage}</p>
+            <p>Current player index: {gameState?.current_player_index}</p>
+            <p>Current user ID: {session?.user?.id || sessionStorage.getItem('guestId')}</p>
+            <p>Current player ID: {players[gameState?.current_player_index]?.user_id}</p>
+            <p>Show controls: {String(
+              gameState?.current_stage.includes('betting') && 
+              gameState?.current_player_index !== undefined &&
+              players.length > 0 &&
+              gameState.current_player_index < players.length &&
+              players[gameState.current_player_index]?.user_id === (session?.user?.id || sessionStorage.getItem('guestId'))
+            )}</p>
+          </div>
+          */}
         </div>
         
         {/* Chat Sidebar */}
