@@ -28,134 +28,174 @@ const GameRoom = ({ session, supabase }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  console.log("GameRoom component mounted with roomId:", roomId);
+
   // Fetch initial data and set up subscriptions
-  useEffect(() => {
-    const fetchGameData = async () => {
-      try {
-        // Get room details
-        const { data: roomData, error: roomError } = await supabase
-          .from('rooms')
-          .select('*')
-          .eq('id', roomId)
-          .single();
+  const fetchGameData = async () => {
+    try {
+      console.log("Fetching game data for room:", roomId);
+      
+      // Get room details
+      const { data: roomData, error: roomError } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('id', roomId)
+        .single();
 
-        if (roomError) throw roomError;
-        setRoom(roomData);
-        setBetAmount(roomData.small_blind);
+      if (roomError) {
+        console.error("Room error:", roomError);
+        throw roomError;
+      }
+      
+      console.log("Room data:", roomData);
+      setRoom(roomData);
+      setBetAmount(roomData.small_blind);
 
-        // Determine user ID - regular user or guest
-        let userId;
-        if (session && session.user) {
-          userId = session.user.id;
-        } else if (sessionStorage.getItem('guestId')) {
-          userId = sessionStorage.getItem('guestId'); // Use plain UUID without prefix
-        } else {
-          // Not authenticated and not a guest, redirect to login
-          navigate('/login');
-          return;
-        }
+      // Determine user ID - regular user or guest
+      let userId;
+      if (session && session.user) {
+        userId = session.user.id;
+        console.log("Using authenticated user ID:", userId);
+      } else if (sessionStorage.getItem('guestId')) {
+        userId = sessionStorage.getItem('guestId'); // Use plain UUID without prefix
+        console.log("Using guest user ID:", userId);
+      } else {
+        // Not authenticated and not a guest, redirect to login
+        console.error("No user ID found - not authenticated and not guest");
+        navigate('/login');
+        return;
+      }
 
-        // Get players in the room
-        const { data: playersData, error: playersError } = await supabase
-          .from('room_players')
-          .select('*')  // Just select all fields without any joins
-          .eq('room_id', roomId)
-          .order('seat_position', { ascending: true });
+      // Get players in the room
+      console.log("Fetching players for room:", roomId);
+      const { data: playersData, error: playersError } = await supabase
+        .from('room_players')
+        .select('*')  // Just select all fields without any joins
+        .eq('room_id', roomId)
+        .order('seat_position', { ascending: true });
 
-        if (playersError) throw playersError;
-        
-        // Process player data - fetch profile data separately for each player
-        const processedPlayers = await Promise.all(playersData.map(async (player) => {
-          // If player has metadata with username (guest), use that
-          if (player.metadata && player.metadata.username) {
-            return {
-              ...player,
-              profiles: { username: player.metadata.username }
-            };
-          } 
-          // Otherwise fetch username from profiles table
-          else {
-            try {
-              const { data: profileData } = await supabase
-                .from('profiles')
-                .select('username')
-                .eq('id', player.user_id)
-                .single();
-                
-              return {
-                ...player,
-                profiles: { username: profileData?.username || 'Unknown User' }
-              };
-            } catch (e) {
-              console.error("Error fetching profile:", e);
-              return {
-                ...player,
-                profiles: { username: 'Unknown User' }
-              };
-            }
-          }
-        }));
-        
-        setPlayers(processedPlayers);
-
-        // Find current user's player data
-        const userPlayer = processedPlayers.find(player => player.user_id === userId);
-        if (userPlayer) {
-          setCurrentUserPlayer(userPlayer);
-          setIsHost(userPlayer.is_host);
-        } else {
-          // User is not in this room, redirect to home
-          navigate('/');
-          return;
-        }
-
-        // Get game state
-        const { data: gameStateData, error: gameStateError } = await supabase
-          .from('game_states')
-          .select('*')
-          .eq('room_id', roomId)
-          .single();
-
-        if (gameStateError && gameStateError.code !== 'PGRST116') {
-          throw gameStateError;
-        }
-        
-        if (gameStateData) {
-          setGameState(gameStateData);
-          
-          // If there's a current question, fetch it
-          if (gameStateData.current_question_id) {
-            const { data: questionData, error: questionError } = await supabase
-              .from('questions')
-              .select('*')
-              .eq('id', gameStateData.current_question_id)
+      if (playersError) {
+        console.error("Players error:", playersError);
+        throw playersError;
+      }
+      
+      console.log("Players data:", playersData);
+      
+      // Process player data - fetch profile data separately for each player
+      const processedPlayers = await Promise.all(playersData.map(async (player) => {
+        // If player has metadata with username (guest), use that
+        if (player.metadata && player.metadata.username) {
+          console.log("Player is a guest:", player.metadata);
+          return {
+            ...player,
+            profiles: { username: player.metadata.username }
+          };
+        } 
+        // Otherwise fetch username from profiles table
+        else {
+          try {
+            const { data: profileData } = await supabase
+              .from('profiles')
+              .select('username')
+              .eq('id', player.user_id)
               .single();
               
-            if (questionError) throw questionError;
+            return {
+              ...player,
+              profiles: { username: profileData?.username || 'Unknown User' }
+            };
+          } catch (e) {
+            console.error("Error fetching profile:", e);
+            return {
+              ...player,
+              profiles: { username: 'Unknown User' }
+            };
+          }
+        }
+      }));
+      
+      console.log("Processed players:", processedPlayers);
+      setPlayers(processedPlayers);
+
+      // Find current user's player data
+      console.log("Looking for current user in players list");
+      const userPlayer = processedPlayers.find(player => {
+        console.log("Comparing player ID:", player.user_id, "with user ID:", userId);
+        return player.user_id === userId;
+      });
+      
+      if (userPlayer) {
+        console.log("Found current user player:", userPlayer);
+        setCurrentUserPlayer(userPlayer);
+        setIsHost(userPlayer.is_host);
+      } else {
+        console.error("User not found in this game - redirecting to home");
+        // User is not in this room, redirect to home
+        navigate('/');
+        return;
+      }
+
+      // Get game state
+      console.log("Fetching game state");
+      const { data: gameStateData, error: gameStateError } = await supabase
+        .from('game_states')
+        .select('*')
+        .eq('room_id', roomId)
+        .single();
+
+      if (gameStateError) {
+        console.error("Game state error:", gameStateError);
+        if (gameStateError.code !== 'PGRST116') { // Not found error
+          throw gameStateError;
+        }
+        console.log("No game state found - waiting for initialization");
+      } else {
+        console.log("Game state:", gameStateData);
+        setGameState(gameStateData);
+        
+        // If there's a current question, fetch it
+        if (gameStateData.current_question_id) {
+          console.log("Fetching question:", gameStateData.current_question_id);
+          const { data: questionData, error: questionError } = await supabase
+            .from('questions')
+            .select('*')
+            .eq('id', gameStateData.current_question_id)
+            .single();
+            
+          if (questionError) {
+            console.error("Question error:", questionError);
+            // Continue without a question, we'll show appropriate UI
+          } else {
+            console.log("Question data:", questionData);
             setCurrentQuestion(questionData);
           }
-        } else if (isHost) {
-          // Initialize game state if host and no game state exists
-          await initializeGameState();
         }
-
-        // Get chat messages
-        const { data: chatData, error: chatError } = await supabase
-          .from('room_chat')
-          .select('*, profiles:user_id (username)')
-          .eq('room_id', roomId)
-          .order('created_at', { ascending: true });
-
-        if (chatError) throw chatError;
-        setChat(chatData);
-      } catch (error) {
-        console.error('Error fetching game data:', error);
-        setError(error.message);
-      } finally {
-        setLoading(false);
       }
-    };
 
+      // Get chat messages
+      console.log("Fetching chat messages");
+      const { data: chatData, error: chatError } = await supabase
+        .from('room_chat')
+        .select('*, profiles:user_id (username)')
+        .eq('room_id', roomId)
+        .order('created_at', { ascending: true });
+
+      if (chatError) {
+        console.error("Chat error:", chatError);
+        // Continue without chat history
+      } else {
+        console.log("Chat data:", chatData);
+        setChat(chatData);
+      }
+    } catch (error) {
+      console.error('Error fetching game data:', error);
+      setError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchGameData();
 
     // Set up real-time subscriptions
@@ -220,70 +260,23 @@ const GameRoom = ({ session, supabase }) => {
       supabase.removeChannel(gameStateChannel);
       supabase.removeChannel(chatChannel);
     };
-  }, [roomId, session, supabase, navigate, isHost]);
+  }, [roomId, session, supabase, navigate]);
 
-  // Initialize game state function
-  const initializeGameState = async () => {
-    try {
-      // Select a random question from the database
-      const { data: randomQuestion, error: questionError } = await supabase
-        .from('questions')
-        .select('*')
-        .order('RANDOM()')
-        .limit(1)
-        .single();
-
-      if (questionError) throw questionError;
-
-      // Create the game state
-      const { error: gameStateError } = await supabase
-        .from('game_states')
-        .insert([
-          {
-            room_id: roomId,
-            current_stage: 'question',
-            pot: room.small_blind + room.big_blind, // Initial pot with blinds
-            current_bet: room.big_blind,
-            current_player_index: 2 % players.length, // Start with player after big blind
-            current_question_id: randomQuestion.id,
-            timer_end: new Date(Date.now() + 60000).toISOString() // 60 seconds for answer
-          }
-        ]);
-
-      if (gameStateError) throw gameStateError;
-
-      // Set blinds for first two players
-      const sortedPlayers = [...players].sort((a, b) => a.seat_position - b.seat_position);
-      
-      // Small blind
-      const { error: smallBlindError } = await supabase
-        .from('room_players')
-        .update({ 
-          chips: sortedPlayers[0].chips - room.small_blind,
-          current_bet: room.small_blind
-        })
-        .eq('id', sortedPlayers[0].id);
-        
-      if (smallBlindError) throw smallBlindError;
-      
-      // Big blind
-      const { error: bigBlindError } = await supabase
-        .from('room_players')
-        .update({ 
-          chips: sortedPlayers[1].chips - room.big_blind,
-          current_bet: room.big_blind
-        })
-        .eq('id', sortedPlayers[1].id);
-        
-      if (bigBlindError) throw bigBlindError;
-      
-      // Set the current question
-      setCurrentQuestion(randomQuestion);
-    } catch (error) {
-      console.error('Error initializing game state:', error);
-      setError('Failed to initialize game. Please try again.');
-    }
-  };
+  // Add polling for game state updates
+  useEffect(() => {
+    console.log("Setting up game state polling");
+    
+    // Poll for game state updates every 3 seconds
+    const gamePollingInterval = setInterval(() => {
+      if (!loading) {
+        fetchGameData();
+      }
+    }, 3000);
+    
+    return () => {
+      clearInterval(gamePollingInterval);
+    };
+  }, [loading]); // Only dependency is loading state
 
   // Timer effect for the question phase
   useEffect(() => {
@@ -346,7 +339,7 @@ const GameRoom = ({ session, supabase }) => {
         .insert([
           {
             room_id: roomId,
-            user_id: session.user.id,
+            user_id: session?.user?.id || sessionStorage.getItem('guestId'),
             message: chatMessage.trim()
           }
         ]);
@@ -386,7 +379,7 @@ const GameRoom = ({ session, supabase }) => {
       // Only allow the current player to act
       if (
         !gameState?.current_stage.includes('betting') || 
-        players[gameState.current_player_index]?.user_id !== session.user.id
+        players[gameState.current_player_index]?.user_id !== (session?.user?.id || sessionStorage.getItem('guestId'))
       ) {
         return;
       }
@@ -746,7 +739,16 @@ const GameRoom = ({ session, supabase }) => {
 
   // Render poker table with players
   const renderPokerTable = () => {
-    if (!players || players.length === 0) return null;
+    if (!players || players.length === 0) {
+      console.log("No players available to render poker table");
+      return (
+        <div className="relative mb-6 p-6 bg-gray-800 rounded-lg text-center">
+          <p>Loading game data...</p>
+        </div>
+      );
+    }
+    
+    console.log("Rendering poker table with players:", players);
     
     // Calculate positions for players around the table
     const getPlayerPosition = (index, totalPlayers) => {
@@ -760,7 +762,9 @@ const GameRoom = ({ session, supabase }) => {
       ];
       
       // Find current user index
-      const currentUserIndex = players.findIndex(p => p.user_id === session.user.id);
+      const currentUserIndex = players.findIndex(p => 
+        p.user_id === (session?.user?.id || sessionStorage.getItem('guestId'))
+      );
       
       // Calculate relative position
       let relativeIndex = (index - currentUserIndex + totalPlayers) % totalPlayers;
@@ -814,10 +818,10 @@ const GameRoom = ({ session, supabase }) => {
               <div className="flex justify-between items-center">
                 <div>
                   <div className="font-bold flex items-center">
-                    {player.user_id === session.user.id && (
+                    {player.user_id === (session?.user?.id || sessionStorage.getItem('guestId')) && (
                       <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
                     )}
-                    {player.profiles.username}
+                    {player.profiles?.username || 'Unknown Player'}
                     {player.is_host && (
                       <span className="ml-2 text-xs text-yellow-400">(Host)</span>
                     )}
@@ -1043,12 +1047,11 @@ const GameRoom = ({ session, supabase }) => {
           ? activePlayers[0]
           : activePlayers.reduce((closest, player) => {
               if (player.answer === null) return closest;
-              const currentDiff = closest.answer !== null 
-                ? Math.abs(closest.answer - currentQuestion.correct_answer)
-                : Infinity;
+              if (closest.answer === null) return player;
+              const currentDiff = Math.abs(closest.answer - currentQuestion.correct_answer);
               const playerDiff = Math.abs(player.answer - currentQuestion.correct_answer);
               return playerDiff < currentDiff ? player : closest;
-            }, activePlayers[0]);
+            }, activePlayers[0] || {});
             
         return (
           <div className="space-y-2">
@@ -1076,7 +1079,7 @@ const GameRoom = ({ session, supabase }) => {
               <div className="p-2 bg-yellow-900 bg-opacity-50 rounded-lg flex items-center justify-center mt-3">
                 <Award className="text-yellow-400 mr-2" size={20} />
                 <span className="font-bold text-white">
-                  {winner.profiles.username} wins with the closest answer!
+                  {winner?.profiles?.username || 'Unknown Player'} wins with the closest answer!
                 </span>
               </div>
               
@@ -1119,13 +1122,13 @@ const GameRoom = ({ session, supabase }) => {
               <div 
                 key={message.id} 
                 className={`p-2 rounded max-w-xs ${
-                  message.user_id === session.user.id
+                  message.user_id === (session?.user?.id || sessionStorage.getItem('guestId'))
                     ? 'ml-auto bg-blue-700 text-white'
                     : 'bg-gray-700 text-white'
                 }`}
               >
                 <div className="text-xs opacity-75 mb-1">
-                  {message.profiles.username}
+                  {message.profiles?.username || 'Unknown User'}
                 </div>
                 <div className="text-sm">{message.message}</div>
               </div>
@@ -1229,7 +1232,7 @@ const GameRoom = ({ session, supabase }) => {
           
           {gameState?.current_stage.includes('betting') && 
            gameState?.current_player_index !== undefined &&
-           players[gameState.current_player_index]?.user_id === session.user.id && (
+           players[gameState.current_player_index]?.user_id === (session?.user?.id || sessionStorage.getItem('guestId')) && (
             <div className="max-w-md mx-auto">
               <div className="flex justify-between items-center mb-2">
                 <span className="text-gray-300">Current bet: ${gameState.current_bet}</span>
