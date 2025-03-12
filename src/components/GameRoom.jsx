@@ -58,26 +58,43 @@ const GameRoom = ({ session, supabase }) => {
         // Get players in the room
         const { data: playersData, error: playersError } = await supabase
           .from('room_players')
-          .select(`
-            *,
-            profiles:user_id (username)
-          `)
+          .select('*')  // Just select all fields without any joins
           .eq('room_id', roomId)
           .order('seat_position', { ascending: true });
 
         if (playersError) throw playersError;
         
-        // Process player data - for guest users, get username from metadata
-        const processedPlayers = playersData.map(player => {
+        // Process player data - fetch profile data separately for each player
+        const processedPlayers = await Promise.all(playersData.map(async (player) => {
           // If player has metadata with username (guest), use that
           if (player.metadata && player.metadata.username) {
             return {
               ...player,
               profiles: { username: player.metadata.username }
             };
+          } 
+          // Otherwise fetch username from profiles table
+          else {
+            try {
+              const { data: profileData } = await supabase
+                .from('profiles')
+                .select('username')
+                .eq('id', player.user_id)
+                .single();
+                
+              return {
+                ...player,
+                profiles: { username: profileData?.username || 'Unknown User' }
+              };
+            } catch (e) {
+              console.error("Error fetching profile:", e);
+              return {
+                ...player,
+                profiles: { username: 'Unknown User' }
+              };
+            }
           }
-          return player;
-        });
+        }));
         
         setPlayers(processedPlayers);
 
