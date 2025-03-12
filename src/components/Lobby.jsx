@@ -18,6 +18,8 @@ const Lobby = ({ session, supabase }) => {
   useEffect(() => {
     const fetchRoomData = async () => {
       try {
+        console.log("Fetching room data for ID:", roomId);
+        
         // Get room details
         const { data: roomData, error: roomError } = await supabase
           .from('rooms')
@@ -25,20 +27,92 @@ const Lobby = ({ session, supabase }) => {
           .eq('id', roomId)
           .single();
 
-        if (roomError) throw roomError;
+        if (roomError) {
+          console.error("Room error:", roomError);
+          throw roomError;
+        }
+        
+        console.log("Room data:", roomData);
         setRoom(roomData);
 
         // Determine user ID - regular user or guest
         let userId;
         if (session && session.user) {
           userId = session.user.id;
+          console.log("Using authenticated user ID:", userId);
         } else if (sessionStorage.getItem('guestId')) {
           userId = sessionStorage.getItem('guestId'); // Use plain UUID without prefix
+          console.log("Using guest user ID:", userId);
         } else {
           // Not authenticated and not a guest, redirect to login
+          console.error("No user ID found - not authenticated and not guest");
           navigate('/login');
           return;
         }
+
+        // Get players in the room
+        console.log("Fetching players for room:", roomId);
+        const { data: playersData, error: playersError } = await supabase
+          .from('room_players')
+          .select(`
+            *,
+            profiles:user_id (username)
+          `)
+          .eq('room_id', roomId)
+          .order('seat_position', { ascending: true });
+
+        if (playersError) {
+          console.error("Players error:", playersError);
+          throw playersError;
+        }
+        
+        console.log("Players data:", playersData);
+        
+        // Process player data - for guest users, get username from metadata
+        const processedPlayers = playersData.map(player => {
+          // If player has metadata with username (guest), use that
+          if (player.metadata && player.metadata.username) {
+            return {
+              ...player,
+              profiles: { username: player.metadata.username }
+            };
+          }
+          return player;
+        });
+        
+        setPlayers(processedPlayers);
+
+        console.log("Current user ID:", userId);
+        console.log("Looking for user in players...");
+        // Check if current user is the host
+        const currentPlayer = processedPlayers.find(player => {
+          console.log("Comparing player ID:", player.user_id, "with user ID:", userId);
+          return player.user_id === userId;
+        });
+        
+        if (currentPlayer) {
+          console.log("Current player found:", currentPlayer);
+          setIsHost(currentPlayer.is_host);
+        } else {
+          console.warn("User not found in room players - redirecting to home");
+          // User is not in this room, redirect to home
+          navigate('/');
+        }
+
+        // Check if game has already started
+        if (roomData.status === 'in_progress') {
+          console.log("Game in progress - redirecting to game room");
+          navigate(`/game/${roomId}`);
+        }
+      } catch (error) {
+        console.error('Error fetching room data:', error);
+        setError(error.message);
+        // Navigate back home on error
+        navigate('/');
+      } finally {
+        setLoading(false);
+      }
+    };
 
         // Get players in the room
         const { data: playersData, error: playersError } = await supabase
