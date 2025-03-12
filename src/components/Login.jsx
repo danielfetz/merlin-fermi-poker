@@ -1,12 +1,13 @@
 // components/Login.jsx
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 const Login = ({ supabase }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -22,6 +23,32 @@ const Login = ({ supabase }) => {
       if (error) throw error;
     } catch (error) {
       setError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Generate a random username for the guest
+      const guestUsername = 'Guest_' + Math.random().toString(36).substring(2, 8);
+      
+      // Create a temporary session without authentication
+      sessionStorage.setItem('guestUser', JSON.stringify({
+        username: guestUsername,
+        isGuest: true,
+        chips_balance: 1000,
+        games_played: 0,
+        games_won: 0
+      }));
+      
+      // Navigate to the home page
+      navigate('/');
+    } catch (error) {
+      setError('Failed to login as guest');
     } finally {
       setLoading(false);
     }
@@ -78,6 +105,16 @@ const Login = ({ supabase }) => {
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
+        
+        <div className="mt-4">
+          <button
+            onClick={handleGuestLogin}
+            disabled={loading}
+            className="w-full px-4 py-2 text-white bg-green-600 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
+          >
+            {loading ? 'Loading...' : 'Continue as Guest'}
+          </button>
+        </div>
         
         <p className="mt-4 text-sm text-center text-gray-400">
           Don't have an account?{' '}
