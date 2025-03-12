@@ -17,7 +17,7 @@ const Register = ({ supabase }) => {
 
     try {
       // Sign up the user
-      const { error: signUpError } = await supabase.auth.signUp({
+      const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -28,21 +28,24 @@ const Register = ({ supabase }) => {
       });
 
       if (signUpError) throw signUpError;
+      
+      // We now have the user ID from the signup response
+      if (data && data.user) {
+        // Create a profile in the profiles table
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert([
+            { 
+              id: data.user.id,
+              username,
+              chips_balance: 1000, // Starting chips balance
+              games_played: 0,
+              games_won: 0
+            },
+          ]);
 
-      // Create a profile in the profiles table
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert([
-          { 
-            id: (await supabase.auth.getUser()).data.user.id,
-            username,
-            chips_balance: 1000, // Starting chips balance
-            games_played: 0,
-            games_won: 0
-          },
-        ]);
-
-      if (profileError) throw profileError;
+        if (profileError) throw profileError;
+      }
       
       setSuccess(true);
     } catch (error) {
