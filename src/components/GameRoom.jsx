@@ -159,47 +159,66 @@ const GameRoom = ({ session, supabase }) => {
     fetchGameData();
 
     // Set up real-time subscriptions
-    const roomPlayersSubscription = supabase
-      .channel(`room_players:${roomId}`)
+    const roomPlayersChannelName = `game-players-${roomId}`;
+    console.log(`Creating player channel: ${roomPlayersChannelName}`);
+    
+    const roomPlayersChannel = supabase
+      .channel(roomPlayersChannelName)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
         table: 'room_players',
         filter: `room_id=eq.${roomId}`
-      }, () => {
+      }, (payload) => {
+        console.log("Room players change detected:", payload);
         fetchGameData();
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`Player channel status: ${status}`);
+      });
 
-    const gameStateSubscription = supabase
-      .channel(`game_states:${roomId}`)
+    const gameStateChannelName = `game-state-${roomId}`;
+    console.log(`Creating game state channel: ${gameStateChannelName}`);
+    
+    const gameStateChannel = supabase
+      .channel(gameStateChannelName)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
         table: 'game_states',
         filter: `room_id=eq.${roomId}`
-      }, () => {
+      }, (payload) => {
+        console.log("Game state change detected:", payload);
         fetchGameData();
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`Game state channel status: ${status}`);
+      });
 
-    const chatSubscription = supabase
-      .channel(`room_chat:${roomId}`)
+    const chatChannelName = `game-chat-${roomId}`;
+    console.log(`Creating chat channel: ${chatChannelName}`);
+    
+    const chatChannel = supabase
+      .channel(chatChannelName)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'room_chat',
         filter: `room_id=eq.${roomId}`
       }, (payload) => {
+        console.log("New chat message:", payload);
         fetchChatMessage(payload.new.id);
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`Chat channel status: ${status}`);
+      });
 
     // Cleanup subscriptions
     return () => {
-      supabase.removeChannel(roomPlayersSubscription);
-      supabase.removeChannel(gameStateSubscription);
-      supabase.removeChannel(chatSubscription);
+      console.log("Cleaning up game room subscriptions");
+      supabase.removeChannel(roomPlayersChannel);
+      supabase.removeChannel(gameStateChannel);
+      supabase.removeChannel(chatChannel);
     };
   }, [roomId, session, supabase, navigate, isHost]);
 
@@ -833,7 +852,57 @@ const GameRoom = ({ session, supabase }) => {
 
   // Render game content based on current stage
   const renderGameContent = () => {
-    if (!gameState || !currentQuestion) return <div>Loading game...</div>;
+    if (!gameState) {
+      console.log("No game state yet, showing waiting screen");
+      return (
+        <div className="p-4 text-center">
+          <h3 className="text-xl font-bold mb-4">Game is starting...</h3>
+          <p className="text-gray-300">Please wait while the host sets up the game</p>
+          <div className="mt-4">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          </div>
+        </div>
+      );
+    }
+    
+    if (!currentQuestion && gameState.current_question_id) {
+      // If we have a question ID but no question loaded yet
+      console.log("Fetching question ID:", gameState.current_question_id);
+      
+      // Try to fetch the question
+      supabase
+        .from('questions')
+        .select('*')
+        .eq('id', gameState.current_question_id)
+        .single()
+        .then(({ data, error }) => {
+          if (error) {
+            console.error("Error fetching question:", error);
+          } else if (data) {
+            console.log("Question data loaded:", data);
+            setCurrentQuestion(data);
+          }
+        });
+        
+      return (
+        <div className="p-4 text-center">
+          <h3 className="text-xl font-bold mb-4">Loading question...</h3>
+          <div className="mt-4">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          </div>
+        </div>
+      );
+    }
+    
+    if (!currentQuestion) {
+      console.log("No question available");
+      return (
+        <div className="p-4 text-center">
+          <h3 className="text-xl font-bold mb-4">Waiting for the host to select a question</h3>
+          <p className="text-gray-300">The game will start shortly</p>
+        </div>
+      );
+    }
     
     switch(gameState.current_stage) {
       case 'question':
