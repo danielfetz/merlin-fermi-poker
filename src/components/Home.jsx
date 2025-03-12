@@ -29,16 +29,49 @@ const Home = ({ session, guestUser, supabase }) => {
           setUser(data);
         }
 
-        // Fetch active rooms
+        // Fetch active rooms - without trying to join with profiles
         const { data: roomsData, error: roomsError } = await supabase
           .from('rooms')
-          .select('*, profiles(username)')
+          .select('*')
           .eq('status', 'waiting')
           .order('created_at', { ascending: false })
           .limit(5);
 
         if (roomsError) throw roomsError;
-        setActiveRooms(roomsData);
+        
+        // Fetch host usernames separately for each room
+        const roomsWithHostnames = await Promise.all(roomsData.map(async (room) => {
+          // Check if it's a guest host
+          if (room.is_guest_host) {
+            // For guest hosts, we need to get the username from room_players
+            const { data: playerData } = await supabase
+              .from('room_players')
+              .select('metadata')
+              .eq('room_id', room.id)
+              .eq('user_id', room.host_id)
+              .single();
+              
+            const hostUsername = playerData?.metadata?.username || 'Guest Host';
+            return {
+              ...room,
+              host_username: hostUsername
+            };
+          } else {
+            // For regular users, get username from profiles
+            const { data: profileData } = await supabase
+              .from('profiles')
+              .select('username')
+              .eq('id', room.host_id)
+              .single();
+              
+            return {
+              ...room,
+              host_username: profileData?.username || 'Unknown Host'
+            };
+          }
+        }));
+        
+        setActiveRooms(roomsWithHostnames);
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
