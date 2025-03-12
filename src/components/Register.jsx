@@ -31,20 +31,33 @@ const Register = ({ supabase }) => {
       
       // We now have the user ID from the signup response
       if (data && data.user) {
-        // Create a profile in the profiles table
-        const { error: profileError } = await supabase
+        // Check if a profile already exists (it might be created by a trigger)
+        const { data: existingProfile } = await supabase
           .from('profiles')
-          .insert([
-            { 
-              id: data.user.id,
-              username,
-              chips_balance: 1000, // Starting chips balance
-              games_played: 0,
-              games_won: 0
-            },
-          ]);
+          .select('id')
+          .eq('id', data.user.id)
+          .single();
+          
+        // Only create a profile if one doesn't already exist
+        if (!existingProfile) {
+          // Create a profile in the profiles table
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .insert([
+              { 
+                id: data.user.id,
+                username,
+                chips_balance: 1000, // Starting chips balance
+                games_played: 0,
+                games_won: 0
+              },
+            ]);
 
-        if (profileError) throw profileError;
+          if (profileError) {
+            console.error("Profile creation error:", profileError);
+            // Continue anyway since the trigger might have created it
+          }
+        }
       }
       
       setSuccess(true);
