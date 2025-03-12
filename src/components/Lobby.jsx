@@ -155,8 +155,13 @@ const Lobby = ({ session, guestUser, supabase }) => {
 
     // Set up subscriptions for real-time updates
     console.log("Setting up real-time subscriptions");
-    const playersSubscription = supabase
-      .channel(`room_players:${roomId}`)
+    
+    // Set up a better player subscription that listens to all changes on room_players table
+    const playerChannelName = `lobby-players-${roomId}`;
+    console.log(`Creating player channel: ${playerChannelName}`);
+    
+    const playerChannel = supabase
+      .channel(playerChannelName)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -166,29 +171,40 @@ const Lobby = ({ session, guestUser, supabase }) => {
         console.log("Room players change detected:", payload);
         fetchRoomData();
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`Player channel status: ${status}`);
+      });
 
-    const roomSubscription = supabase
-      .channel(`rooms:${roomId}`)
+    // Set up room status subscription
+    const roomChannelName = `lobby-room-${roomId}`;
+    console.log(`Creating room channel: ${roomChannelName}`);
+    
+    const roomChannel = supabase
+      .channel(roomChannelName)
       .on('postgres_changes', {
-        event: '*',
+        event: 'UPDATE',
         schema: 'public',
         table: 'rooms',
         filter: `id=eq.${roomId}`
       }, (payload) => {
         console.log("Room data change detected:", payload);
-        if (payload.new.status === 'in_progress') {
+        
+        // If room status changes to in_progress, navigate to game
+        if (payload.new && payload.new.status === 'in_progress') {
+          console.log("Room status changed to in_progress - navigating to game");
           navigate(`/game/${roomId}`);
         } else {
           fetchRoomData();
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`Room channel status: ${status}`);
+      });
 
     return () => {
       console.log("Cleaning up subscriptions");
-      supabase.removeChannel(playersSubscription);
-      supabase.removeChannel(roomSubscription);
+      supabase.removeChannel(playerChannel);
+      supabase.removeChannel(roomChannel);
     };
   }, [roomId, session, supabase, navigate, guestUser]);
 
