@@ -47,22 +47,27 @@ const CreateRoom = ({ session, guestUser, supabase }) => {
       }
       
       // Insert the room record
+      const roomData = {
+        name: roomName,
+        host_id: userId,
+        max_players: maxPlayers,
+        initial_chips: initialChips,
+        small_blind: smallBlind,
+        big_blind: bigBlind,
+        status: 'waiting',
+        is_private: isPrivate,
+        room_code: roomCode,
+        current_players: 1
+      };
+      
+      // If this is a guest user, set the is_guest_host flag
+      if (!session || !session.user) {
+        roomData.is_guest_host = true;
+      }
+      
       const { data: room, error: roomError } = await supabase
         .from('rooms')
-        .insert([
-          {
-            name: roomName,
-            host_id: userId,
-            max_players: maxPlayers,
-            initial_chips: initialChips,
-            small_blind: smallBlind,
-            big_blind: bigBlind,
-            status: 'waiting',
-            is_private: isPrivate,
-            room_code: roomCode,
-            current_players: 1
-          }
-        ])
+        .insert([roomData])
         .select()
         .single();
 
