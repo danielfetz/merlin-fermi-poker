@@ -19,138 +19,139 @@ const Lobby = ({ session, guestUser, supabase }) => {
   console.log("Session:", session);
   console.log("Guest user:", guestUser);
 
-  useEffect(() => {
-    console.log("Lobby useEffect running");
-    
-    const fetchRoomData = async () => {
-      console.log("Beginning fetchRoomData function");
-      try {
-        console.log("Fetching room data for ID:", roomId);
-        
-        // Get room details
-        const { data: roomData, error: roomError } = await supabase
-          .from('rooms')
-          .select('*')
-          .eq('id', roomId)
-          .single();
+  // Function to fetch room data - defined outside useEffect so it can be called from polling
+  const fetchRoomData = async () => {
+    console.log("Beginning fetchRoomData function");
+    try {
+      console.log("Fetching room data for ID:", roomId);
+      
+      // Get room details
+      const { data: roomData, error: roomError } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('id', roomId)
+        .single();
 
-        if (roomError) {
-          console.error("Room error:", roomError);
-          throw roomError;
-        }
-        
-        console.log("Room data successfully retrieved:", roomData);
-        setRoom(roomData);
+      if (roomError) {
+        console.error("Room error:", roomError);
+        throw roomError;
+      }
+      
+      console.log("Room data successfully retrieved:", roomData);
+      setRoom(roomData);
 
-        // Determine user ID - regular user or guest
-        let userId;
-        if (session && session.user) {
-          userId = session.user.id;
-          console.log("Using authenticated user ID:", userId);
-        } else if (sessionStorage.getItem('guestId')) {
-          userId = sessionStorage.getItem('guestId'); // Use plain UUID without prefix
-          console.log("Using guest user ID:", userId);
-        } else {
-          // Not authenticated and not a guest, redirect to login
-          console.error("No user ID found - not authenticated and not guest");
-          navigate('/login');
-          return;
-        }
+      // Determine user ID - regular user or guest
+      let userId;
+      if (session && session.user) {
+        userId = session.user.id;
+        console.log("Using authenticated user ID:", userId);
+      } else if (sessionStorage.getItem('guestId')) {
+        userId = sessionStorage.getItem('guestId'); // Use plain UUID without prefix
+        console.log("Using guest user ID:", userId);
+      } else {
+        // Not authenticated and not a guest, redirect to login
+        console.error("No user ID found - not authenticated and not guest");
+        navigate('/login');
+        return;
+      }
 
-        // Get players in the room
-        console.log("Fetching players for room:", roomId);
-        const { data: playersData, error: playersError } = await supabase
-          .from('room_players')
-          .select('*')
-          .eq('room_id', roomId);
+      // Get players in the room
+      console.log("Fetching players for room:", roomId);
+      const { data: playersData, error: playersError } = await supabase
+        .from('room_players')
+        .select('*')  // Just select all fields without any joins
+        .eq('room_id', roomId);
 
-        if (playersError) {
-          console.error("Players error:", playersError);
-          throw playersError;
-        }
-        
-        console.log("Players data successfully retrieved:", playersData);
-        
-        // Get usernames for each player
-        const enhancedPlayers = await Promise.all(
-          playersData.map(async (player) => {
-            // Check if player has metadata (guest)
-            if (player.metadata && player.metadata.username) {
-              console.log("Player is a guest with metadata:", player.metadata);
-              return {
-                ...player,
-                profiles: { username: player.metadata.username }
-              };
-            } 
-            // Otherwise fetch username from profiles
-            else {
-              try {
-                const { data: profileData, error: profileError } = await supabase
-                  .from('profiles')
-                  .select('username')
-                  .eq('id', player.user_id)
-                  .single();
-                
-                if (profileError) {
-                  console.error("Error fetching profile for user:", player.user_id, profileError);
-                  return {
-                    ...player,
-                    profiles: { username: 'Unknown User' }
-                  };
-                }
-                
-                return {
-                  ...player,
-                  profiles: { username: profileData.username }
-                };
-              } catch (e) {
-                console.error("Error in profile fetch:", e);
+      if (playersError) {
+        console.error("Players error:", playersError);
+        throw playersError;
+      }
+      
+      console.log("Players data successfully retrieved:", playersData);
+      
+      // Get usernames for each player
+      const enhancedPlayers = await Promise.all(
+        playersData.map(async (player) => {
+          // Check if player has metadata (guest)
+          if (player.metadata && player.metadata.username) {
+            console.log("Player is a guest with metadata:", player.metadata);
+            return {
+              ...player,
+              profiles: { username: player.metadata.username }
+            };
+          } 
+          // Otherwise fetch username from profiles
+          else {
+            try {
+              const { data: profileData, error: profileError } = await supabase
+                .from('profiles')
+                .select('username')
+                .eq('id', player.user_id)
+                .single();
+              
+              if (profileError) {
+                console.error("Error fetching profile for user:", player.user_id, profileError);
                 return {
                   ...player,
                   profiles: { username: 'Unknown User' }
                 };
               }
+              
+              return {
+                ...player,
+                profiles: { username: profileData.username }
+              };
+            } catch (e) {
+              console.error("Error in profile fetch:", e);
+              return {
+                ...player,
+                profiles: { username: 'Unknown User' }
+              };
             }
-          })
-        );
-        
-        console.log("Enhanced players data:", enhancedPlayers);
-        setPlayers(enhancedPlayers);
+          }
+        })
+      );
+      
+      console.log("Enhanced players data:", enhancedPlayers);
+      setPlayers(enhancedPlayers);
 
-        console.log("Current user ID:", userId);
-        console.log("Looking for user in players...");
-        
-        // Check if current user is in this room
-        const currentPlayer = enhancedPlayers.find(player => {
-          console.log("Comparing player ID:", player.user_id, "with user ID:", userId);
-          return player.user_id === userId;
-        });
-        
-        if (currentPlayer) {
-          console.log("Current player found:", currentPlayer);
-          setIsHost(currentPlayer.is_host);
-        } else {
-          console.warn("User not found in room players - redirecting to home");
-          // User is not in this room, redirect to home
-          navigate('/');
-          return;
-        }
-
-        // Check if game has already started
-        if (roomData.status === 'in_progress') {
-          console.log("Game in progress - redirecting to game room");
-          navigate(`/game/${roomId}`);
-        }
-      } catch (error) {
-        console.error('Error fetching room data:', error);
-        setError(error.message);
-        // Navigate back home on error
+      console.log("Current user ID:", userId);
+      console.log("Looking for user in players...");
+      
+      // Check if current user is in this room
+      const currentPlayer = enhancedPlayers.find(player => {
+        console.log("Comparing player ID:", player.user_id, "with user ID:", userId);
+        return player.user_id === userId;
+      });
+      
+      if (currentPlayer) {
+        console.log("Current player found:", currentPlayer);
+        setIsHost(currentPlayer.is_host);
+      } else {
+        console.warn("User not found in room players - redirecting to home");
+        // User is not in this room, redirect to home
         navigate('/');
-      } finally {
-        setLoading(false);
+        return;
       }
-    };
 
+      // Check if game has already started
+      if (roomData.status === 'in_progress') {
+        console.log("Game in progress - redirecting to game room");
+        window.location.href = `/game/${roomId}`;
+      }
+    } catch (error) {
+      console.error('Error fetching room data:', error);
+      setError(error.message);
+      // Navigate back home on error
+      navigate('/');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initial data fetch
+  useEffect(() => {
+    console.log("Lobby useEffect running");
     fetchRoomData();
 
     // Set up subscriptions for real-time updates
@@ -192,7 +193,7 @@ const Lobby = ({ session, guestUser, supabase }) => {
         // If room status changes to in_progress, navigate to game
         if (payload.new && payload.new.status === 'in_progress') {
           console.log("Room status changed to in_progress - navigating to game");
-          navigate(`/game/${roomId}`);
+          window.location.href = `/game/${roomId}`;
         } else {
           fetchRoomData();
         }
@@ -206,7 +207,58 @@ const Lobby = ({ session, guestUser, supabase }) => {
       supabase.removeChannel(playerChannel);
       supabase.removeChannel(roomChannel);
     };
-  }, [roomId, session, supabase, navigate, guestUser]);
+  }, [roomId, session, supabase, navigate]);
+
+  // Add a polling mechanism for real-time backup
+  useEffect(() => {
+    console.log("Setting up polling as backup for real-time updates");
+    
+    // Poll for room and player updates every 3 seconds
+    const pollingInterval = setInterval(() => {
+      if (!loading) {
+        fetchRoomData();
+      }
+    }, 3000);
+    
+    return () => {
+      clearInterval(pollingInterval);
+    };
+  }, [loading]); // Only dependency is loading state
+
+  // Add dedicated room status checker
+  useEffect(() => {
+    console.log("Setting up dedicated room status checker");
+    
+    const checkRoomStatus = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('rooms')
+          .select('status')
+          .eq('id', roomId)
+          .single();
+          
+        if (error) {
+          console.error("Error checking room status:", error);
+          return;
+        }
+        
+        if (data && data.status === 'in_progress') {
+          console.log("Room status is in_progress, navigating to game");
+          // Use window.location for a hard redirect to ensure it works
+          window.location.href = `/game/${roomId}`;
+        }
+      } catch (e) {
+        console.error("Error in room status check:", e);
+      }
+    };
+    
+    // Check every 2 seconds
+    const statusInterval = setInterval(checkRoomStatus, 2000);
+    
+    return () => {
+      clearInterval(statusInterval);
+    };
+  }, [roomId]);
 
   const handleStartGame = async () => {
     console.log("handleStartGame called");
@@ -219,8 +271,49 @@ const Lobby = ({ session, guestUser, supabase }) => {
         return;
       }
 
+      // 1. Fetch a random question first
+      console.log("Fetching a random question");
+      const { data: questionData, error: questionError } = await supabase
+        .from('questions')
+        .select('*')
+        .limit(1)
+        .single();
+        
+      if (questionError) {
+        console.error("Error fetching random question:", questionError);
+        alert("Could not fetch a question. Please try again.");
+        return;
+      }
+      
+      console.log("Got question:", questionData);
+
+      // 2. Create game state with the question
+      console.log("Creating game state");
+      const { data: gameStateData, error: gameStateError } = await supabase
+        .from('game_states')
+        .insert([
+          {
+            room_id: roomId,
+            current_stage: 'question',
+            pot: room.small_blind + room.big_blind,
+            current_bet: room.big_blind,
+            current_player_index: 2 % players.length,
+            current_question_id: questionData.id,
+            timer_end: new Date(Date.now() + 60000).toISOString() // 60 seconds
+          }
+        ])
+        .select();
+
+      if (gameStateError) {
+        console.error("Error creating game state:", gameStateError);
+        alert("Could not initialize game. Please try again.");
+        return;
+      }
+      
+      console.log("Game state created:", gameStateData);
+
+      // 3. Update room status to in_progress
       console.log("Updating room status to in_progress");
-      // Update room status to in_progress
       const { error: updateError } = await supabase
         .from('rooms')
         .update({ status: 'in_progress' })
@@ -228,54 +321,19 @@ const Lobby = ({ session, guestUser, supabase }) => {
 
       if (updateError) {
         console.error("Error updating room status:", updateError);
-        throw updateError;
+        alert("Could not start the game. Please try again.");
+        return;
       }
 
-      // Fetch a random question to use
-      console.log("Fetching a random question");
-      const { data: questionData, error: questionError } = await supabase
-        .from('questions')
-        .select('id')
-        .limit(1)
-        .single();
-        
-      if (questionError) {
-        console.error("Error fetching random question:", questionError);
-        // If no questions exist yet, proceed without a question ID
-        console.log("Continuing without a question ID");
-      }
-      
-      const questionId = questionData?.id || null;
-
-      console.log("Initializing game state with question ID:", questionId);
-      // Initialize the game state
-      const { data: gameStateData, error: gameStateError } = await supabase
-        .from('game_states')
-        .insert([
-          {
-            room_id: roomId,
-            current_stage: 'waiting',
-            pot: 0,
-            current_bet: 0,
-            current_player_index: 0,
-            current_question_id: questionId
-          }
-        ])
-        .select();
-
-      if (gameStateError) {
-        console.error("Error creating game state:", gameStateError);
-        throw gameStateError;
-      }
-      
-      console.log("Game state created:", gameStateData);
-      console.log("Navigating to game");
-      
-      // Navigate to game
-      navigate(`/game/${roomId}`);
+      // 4. Navigate to game room with a hard redirect
+      console.log("Starting game - redirecting all users");
+      setTimeout(() => {
+        window.location.href = `/game/${roomId}`;
+      }, 500);
     } catch (error) {
       console.error('Error starting game:', error);
       setError(error.message);
+      alert("An error occurred while starting the game: " + error.message);
     }
   };
 
