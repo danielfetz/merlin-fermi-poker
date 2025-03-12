@@ -43,8 +43,7 @@ const CreateRoom = ({ session, guestUser, supabase }) => {
             status: 'waiting',
             is_private: isPrivate,
             room_code: roomCode,
-            current_players: 1,
-            host_name: username // Store the host name for guest users
+            current_players: 1
           }
         ])
         .select()
@@ -53,19 +52,26 @@ const CreateRoom = ({ session, guestUser, supabase }) => {
       if (roomError) throw roomError;
 
       // Add the creator as a player in the room
+      const playerData = {
+        room_id: room.id,
+        user_id: userId,
+        chips: initialChips,
+        seat_position: 0, // Host takes first position
+        is_host: true,
+        status: 'waiting'
+      };
+      
+      // If this is a guest user, we'll use metadata to store additional info
+      if (guestUser) {
+        playerData.metadata = { 
+          username: username,
+          isGuest: true
+        };
+      }
+      
       const { error: playerError } = await supabase
         .from('room_players')
-        .insert([
-          {
-            room_id: room.id,
-            user_id: userId,
-            chips: initialChips,
-            seat_position: 0, // Host takes first position
-            is_host: true,
-            status: 'waiting',
-            username: username // Store username for guest users
-          }
-        ]);
+        .insert([playerData]);
 
       if (playerError) throw playerError;
 
