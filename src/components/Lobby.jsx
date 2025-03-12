@@ -290,6 +290,7 @@ const Lobby = ({ session, supabase }) => {
   };
 
   if (loading) {
+    console.log("Lobby is in loading state");
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-900">
         <div className="text-white">Loading lobby...</div>
@@ -298,6 +299,7 @@ const Lobby = ({ session, supabase }) => {
   }
 
   if (error) {
+    console.log("Lobby has error:", error);
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900">
         <div className="p-4 mb-4 text-red-700 bg-red-100 rounded-lg">
@@ -309,6 +311,8 @@ const Lobby = ({ session, supabase }) => {
       </div>
     );
   }
+
+  console.log("Rendering full lobby UI");
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
