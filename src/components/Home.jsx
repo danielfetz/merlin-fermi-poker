@@ -2,49 +2,51 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Users, Plus, LogOut, Award, DollarSign, Clock } from 'lucide-react';
+import NavBar from './NavBar';
 
-const Home = ({ session, supabase }) => {
+const Home = ({ session, guestUser, supabase }) => {
   const [user, setUser] = useState(null);
   const [activeRooms, setActiveRooms] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchUserProfile = async () => {
+    const fetchData = async () => {
       try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+        // If using guest mode, set user from guestUser
+        if (guestUser) {
+          setUser(guestUser);
+        } 
+        // Otherwise fetch user profile from supabase
+        else if (session) {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .single();
 
-        if (error) throw error;
-        setUser(data);
-      } catch (error) {
-        console.error('Error fetching user profile:', error);
-      }
-    };
+          if (error) throw error;
+          setUser(data);
+        }
 
-    const fetchActiveRooms = async () => {
-      try {
-        const { data, error } = await supabase
+        // Fetch active rooms
+        const { data: roomsData, error: roomsError } = await supabase
           .from('rooms')
           .select('*, profiles(username)')
           .eq('status', 'waiting')
           .order('created_at', { ascending: false })
           .limit(5);
 
-        if (error) throw error;
-        setActiveRooms(data);
+        if (roomsError) throw roomsError;
+        setActiveRooms(roomsData);
       } catch (error) {
-        console.error('Error fetching active rooms:', error);
+        console.error('Error fetching data:', error);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchUserProfile();
-    fetchActiveRooms();
+    fetchData();
 
     // Set up subscription for real-time updates to rooms
     const roomsSubscription = supabase
@@ -54,43 +56,46 @@ const Home = ({ session, supabase }) => {
         schema: 'public', 
         table: 'rooms' 
       }, payload => {
-        fetchActiveRooms();
+        fetchRooms();
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(roomsSubscription);
     };
-  }, [session, supabase]);
+  }, [session, guestUser, supabase]);
+
+  const fetchRooms = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('*, profiles(username)')
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) throw error;
+      setActiveRooms(data);
+    } catch (error) {
+      console.error('Error fetching rooms:', error);
+    }
+  };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    // If guest user, clear from session storage
+    if (guestUser) {
+      sessionStorage.removeItem('guestUser');
+      window.location.reload();
+    } 
+    // Otherwise sign out through Supabase
+    else {
+      await supabase.auth.signOut();
+    }
   };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
-      <header className="bg-gray-800 shadow-md">
-        <div className="container flex items-center justify-between p-4 mx-auto">
-          <h1 className="text-2xl font-bold text-yellow-400">Fermi Poker</h1>
-          {user && (
-            <div className="flex items-center space-x-4">
-              <div className="text-sm text-gray-300">
-                <span className="block font-medium">{user.username}</span>
-                <div className="flex items-center">
-                  <DollarSign size={16} className="mr-1 text-yellow-400" />
-                  <span>{user.chips_balance} chips</span>
-                </div>
-              </div>
-              <button
-                onClick={handleSignOut}
-                className="p-2 text-gray-400 rounded-full hover:bg-gray-700 hover:text-white"
-              >
-                <LogOut size={20} />
-              </button>
-            </div>
-          )}
-        </div>
-      </header>
+      <NavBar session={session} supabase={supabase} user={user} guestUser={guestUser} />
 
       <main className="container p-4 mx-auto mt-6">
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -125,15 +130,28 @@ const Home = ({ session, supabase }) => {
                     <Award size={20} className="text-yellow-400" />
                     <span className="text-sm text-gray-300">Games Won</span>
                   </div>
-                  <p className="mt-1 text-2xl font-bold">{user.games_won}</p>
+                  <p className="mt-1 text-2xl font-bold">{user.games_won || 0}</p>
                 </div>
                 <div className="p-3 bg-gray-700 rounded-lg">
                   <div className="flex items-center space-x-2">
                     <Clock size={20} className="text-blue-400" />
                     <span className="text-sm text-gray-300">Games Played</span>
                   </div>
-                  <p className="mt-1 text-2xl font-bold">{user.games_played}</p>
+                  <p className="mt-1 text-2xl font-bold">{user.games_played || 0}</p>
                 </div>
+              </div>
+            )}
+            {guestUser && (
+              <div className="p-3 bg-gray-700 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm text-yellow-400 font-bold">Guest Mode</span>
+                </div>
+                <p className="mt-1 text-sm text-gray-300">
+                  You're playing as a guest. Your progress won't be saved.
+                </p>
+                <Link to="/register" className="mt-2 text-sm text-blue-400 hover:underline inline-block">
+                  Create an account to save your progress
+                </Link>
               </div>
             )}
           </div>
@@ -170,7 +188,7 @@ const Home = ({ session, supabase }) => {
                         <div className="text-sm font-medium text-white">{room.name}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-300">{room.profiles.username}</div>
+                        <div className="text-sm text-gray-300">{room.profiles?.username || "Guest Host"}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-300">{room.current_players}/{room.max_players}</div>
