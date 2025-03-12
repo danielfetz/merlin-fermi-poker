@@ -42,7 +42,7 @@ const CreateRoom = ({ session, guestUser, supabase }) => {
           throw new Error('Guest session expired. Please log in again.');
         }
         
-        userId = `guest-${guestId}`;
+        userId = guestId; // Use plain UUID without prefix for database
         username = guestUserData.username;
       }
       
