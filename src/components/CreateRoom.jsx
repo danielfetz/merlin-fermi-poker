@@ -25,9 +25,26 @@ const CreateRoom = ({ session, guestUser, supabase }) => {
       // Generate a unique room code for joining
       const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
       
-      // For guest users or authenticated users
-      const userId = session?.user?.id || `guest-${uuidv4()}`;
-      const username = session?.user?.user_metadata?.username || guestUser?.username || 'Guest';
+      // Determine user ID and username
+      let userId, username;
+      
+      if (session && session.user) {
+        // Regular authenticated user
+        userId = session.user.id;
+        username = session.user.user_metadata?.username || "User";
+      } else {
+        // Guest user
+        const guestId = sessionStorage.getItem('guestId');
+        const guestUserData = sessionStorage.getItem('guestUser') ? 
+                            JSON.parse(sessionStorage.getItem('guestUser')) : null;
+        
+        if (!guestId || !guestUserData) {
+          throw new Error('Guest session expired. Please log in again.');
+        }
+        
+        userId = `guest-${guestId}`;
+        username = guestUserData.username;
+      }
       
       // Insert the room record
       const { data: room, error: roomError } = await supabase
