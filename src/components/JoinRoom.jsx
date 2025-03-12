@@ -2,8 +2,9 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
 
-const JoinRoom = ({ session, supabase }) => {
+const JoinRoom = ({ session, guestUser, supabase }) => {
   const [roomCode, setRoomCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -33,12 +34,16 @@ const JoinRoom = ({ session, supabase }) => {
         throw new Error('Room is full');
       }
 
+      // For guest users or authenticated users
+      const userId = session?.user?.id || `guest-${uuidv4()}`;
+      const username = session?.user?.user_metadata?.username || guestUser?.username || 'Guest';
+
       // Check if the user is already in the room
       const { data: existingPlayer, error: playerCheckError } = await supabase
         .from('room_players')
         .select('*')
         .eq('room_id', room.id)
-        .eq('user_id', session.user.id)
+        .eq('user_id', userId)
         .single();
 
       if (!playerCheckError && existingPlayer) {
@@ -62,19 +67,36 @@ const JoinRoom = ({ session, supabase }) => {
         nextPosition++;
       }
 
+      // Prepare player data
+      const playerData = {
+        room_id: room.id,
+        user_id: userId,
+        chips: room.initial_chips,
+        seat_position: nextPosition,
+        is_host: false,
+        status: 'waiting'
+      };
+      
+      // If this is a guest user, add metadata
+      if (guestUser) {
+        playerData.metadata = {
+          username: username,
+          isGuest: true
+        };
+        
+        // Also store room info in session storage
+        const guestRooms = JSON.parse(sessionStorage.getItem('guestRooms') || '[]');
+        guestRooms.push({
+          id: room.id,
+          isHost: false
+        });
+        sessionStorage.setItem('guestRooms', JSON.stringify(guestRooms));
+      }
+
       // Add the user as a player in the room
       const { error: joinError } = await supabase
         .from('room_players')
-        .insert([
-          {
-            room_id: room.id,
-            user_id: session.user.id,
-            chips: room.initial_chips,
-            seat_position: nextPosition,
-            is_host: false,
-            status: 'waiting'
-          }
-        ]);
+        .insert([playerData]);
 
       if (joinError) throw joinError;
 
@@ -131,6 +153,12 @@ const JoinRoom = ({ session, supabase }) => {
                 Enter the 6-digit code provided by the room host
               </p>
             </div>
+            
+            {guestUser && (
+              <div className="p-3 bg-yellow-900 bg-opacity-50 rounded text-sm text-yellow-200">
+                <b>Note:</b> You're playing as a guest. Your game progress will only be available during this session.
+              </div>
+            )}
             
             <button
               type="submit"
