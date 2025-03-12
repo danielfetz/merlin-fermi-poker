@@ -1,6 +1,7 @@
 // components/Login.jsx
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { v4 as uuidv4 } from 'uuid';
 
 const Login = ({ supabase }) => {
   const [email, setEmail] = useState('');
@@ -33,8 +34,12 @@ const Login = ({ supabase }) => {
     setError(null);
 
     try {
-      // Generate a random username for the guest
+      // Generate a random username and ID for the guest
+      const guestId = uuidv4();
       const guestUsername = 'Guest_' + Math.random().toString(36).substring(2, 8);
+      
+      // Store the guest ID for consistent reference
+      sessionStorage.setItem('guestId', guestId);
       
       // Create a temporary session without authentication
       sessionStorage.setItem('guestUser', JSON.stringify({
