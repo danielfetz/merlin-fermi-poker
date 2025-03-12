@@ -3,15 +3,26 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Menu, X, LogOut, User, Award, HelpCircle, Settings } from 'lucide-react';
 
-const NavBar = ({ session, supabase, user }) => {
+const NavBar = ({ session, supabase, user, guestUser }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    // If guest user, clear from session storage
+    if (guestUser) {
+      sessionStorage.removeItem('guestUser');
+      window.location.reload();
+    } 
+    // Otherwise sign out through Supabase
+    else {
+      await supabase.auth.signOut();
+    }
     navigate('/login');
   };
+
+  const isGuest = !!guestUser;
+  const displayUser = guestUser || user;
 
   return (
     <nav className="bg-gray-800 shadow-md">
@@ -63,7 +74,7 @@ const NavBar = ({ session, supabase, user }) => {
             </div>
           </div>
           
-          {user && (
+          {displayUser && (
             <div className="hidden md:block">
               <div className="ml-4 flex items-center md:ml-6">
                 <div className="relative">
@@ -73,43 +84,62 @@ const NavBar = ({ session, supabase, user }) => {
                   >
                     <span className="sr-only">Open user menu</span>
                     <div className="h-8 w-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold">
-                      {user.username.charAt(0).toUpperCase()}
+                      {displayUser.username.charAt(0).toUpperCase()}
                     </div>
                   </button>
                   
                   {isProfileOpen && (
                     <div className="origin-top-right absolute right-0 mt-2 w-48 rounded-md shadow-lg py-1 bg-gray-700 ring-1 ring-black ring-opacity-5 focus:outline-none z-10">
                       <div className="px-4 py-2 border-b border-gray-600">
-                        <p className="text-sm font-medium text-white">{user.username}</p>
+                        <p className="text-sm font-medium text-white">
+                          {displayUser.username}
+                          {isGuest && <span className="ml-2 text-xs text-yellow-400">(Guest)</span>}
+                        </p>
                         <p className="text-xs text-gray-300 flex items-center">
                           <Award size={12} className="inline text-yellow-400 mr-1" />
-                          {user.games_won} wins / {user.games_played} games
+                          {displayUser.games_won || 0} wins / {displayUser.games_played || 0} games
                         </p>
                         <p className="text-xs text-gray-300 flex items-center mt-1">
                           <span className="inline text-yellow-400 mr-1">$</span>
-                          {user.chips_balance} chips
+                          {displayUser.chips_balance || 1000} chips
                         </p>
                       </div>
-                      <Link
-                        to="/profile"
-                        className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-600 flex items-center"
-                      >
-                        <User size={16} className="mr-2" />
-                        Your Profile
-                      </Link>
-                      <Link
-                        to="/settings"
-                        className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-600 flex items-center"
-                      >
-                        <Settings size={16} className="mr-2" />
-                        Settings
-                      </Link>
+                      
+                      {!isGuest && (
+                        <>
+                          <Link
+                            to="/profile"
+                            className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-600 flex items-center"
+                          >
+                            <User size={16} className="mr-2" />
+                            Your Profile
+                          </Link>
+                          <Link
+                            to="/settings"
+                            className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-600 flex items-center"
+                          >
+                            <Settings size={16} className="mr-2" />
+                            Settings
+                          </Link>
+                        </>
+                      )}
+                      
+                      {isGuest && (
+                        <Link
+                          to="/register"
+                          className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-600 flex items-center"
+                        >
+                          <User size={16} className="mr-2" />
+                          Create Account
+                        </Link>
+                      )}
+                      
                       <button
                         onClick={handleSignOut}
                         className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-600 flex items-center"
                       >
                         <LogOut size={16} className="mr-2" />
-                        Sign out
+                        {isGuest ? 'Exit Guest Mode' : 'Sign out'}
                       </button>
                     </div>
                   )}
@@ -182,38 +212,54 @@ const NavBar = ({ session, supabase, user }) => {
             </Link>
           </div>
           
-          {user && (
+          {displayUser && (
             <div className="pt-4 pb-3 border-t border-gray-700">
               <div className="flex items-center px-5">
                 <div className="flex-shrink-0">
                   <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold">
-                    {user.username.charAt(0).toUpperCase()}
+                    {displayUser.username.charAt(0).toUpperCase()}
                   </div>
                 </div>
                 <div className="ml-3">
                   <div className="text-base font-medium leading-none text-white">
-                    {user.username}
+                    {displayUser.username}
+                    {isGuest && <span className="ml-2 text-xs text-yellow-400">(Guest)</span>}
                   </div>
                   <div className="text-sm font-medium leading-none text-gray-400 mt-1">
-                    ${user.chips_balance} chips
+                    ${displayUser.chips_balance || 1000} chips
                   </div>
                 </div>
               </div>
               <div className="mt-3 px-2 space-y-1">
-                <Link
-                  to="/profile"
-                  className="block px-3 py-2 rounded-md text-base font-medium text-gray-400 hover:text-white hover:bg-gray-700"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Your Profile
-                </Link>
-                <Link
-                  to="/settings"
-                  className="block px-3 py-2 rounded-md text-base font-medium text-gray-400 hover:text-white hover:bg-gray-700"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Settings
-                </Link>
+                {!isGuest && (
+                  <>
+                    <Link
+                      to="/profile"
+                      className="block px-3 py-2 rounded-md text-base font-medium text-gray-400 hover:text-white hover:bg-gray-700"
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      Your Profile
+                    </Link>
+                    <Link
+                      to="/settings"
+                      className="block px-3 py-2 rounded-md text-base font-medium text-gray-400 hover:text-white hover:bg-gray-700"
+                      onClick={() => setIsMenuOpen(false)}
+                    >
+                      Settings
+                    </Link>
+                  </>
+                )}
+                
+                {isGuest && (
+                  <Link
+                    to="/register"
+                    className="block px-3 py-2 rounded-md text-base font-medium text-gray-400 hover:text-white hover:bg-gray-700"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    Create Account
+                  </Link>
+                )}
+                
                 <button
                   onClick={() => {
                     handleSignOut();
@@ -221,7 +267,7 @@ const NavBar = ({ session, supabase, user }) => {
                   }}
                   className="block w-full text-left px-3 py-2 rounded-md text-base font-medium text-gray-400 hover:text-white hover:bg-gray-700"
                 >
-                  Sign out
+                  {isGuest ? 'Exit Guest Mode' : 'Sign out'}
                 </button>
               </div>
             </div>
