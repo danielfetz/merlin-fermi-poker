@@ -21,11 +21,21 @@ function App() {
   const [guestUser, setGuestUser] = useState(null);
 
   useEffect(() => {
+    const checkGuestUser = () => {
+      const storedGuestUser = sessionStorage.getItem('guestUser');
+      if (storedGuestUser) {
+        try {
+          const parsedGuestUser = JSON.parse(storedGuestUser);
+          setGuestUser(parsedGuestUser);
+        } catch (e) {
+          console.error("Error parsing guest user data:", e);
+          sessionStorage.removeItem('guestUser');
+        }
+      }
+    };
+
     // Check for guest user in session storage
-    const storedGuestUser = sessionStorage.getItem('guestUser');
-    if (storedGuestUser) {
-      setGuestUser(JSON.parse(storedGuestUser));
-    }
+    checkGuestUser();
 
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -41,11 +51,22 @@ function App() {
       // Clear guest user if we have a real session
       if (session) {
         sessionStorage.removeItem('guestUser');
+        sessionStorage.removeItem('guestId');
         setGuestUser(null);
       }
     });
 
-    return () => subscription.unsubscribe();
+    // Also listen for storage events to handle guest login in another tab
+    const handleStorageChange = () => {
+      checkGuestUser();
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener('storage', handleStorageChange);
+    };
   }, []);
 
   if (loading) {
@@ -53,7 +74,7 @@ function App() {
   }
 
   // Consider the user authenticated if they have a session OR are a guest
-  const isAuthenticated = session || guestUser;
+  const isAuthenticated = !!session || !!guestUser;
 
   return (
     <Router>
