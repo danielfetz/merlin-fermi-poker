@@ -2,8 +2,9 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
 
-const CreateRoom = ({ session, supabase }) => {
+const CreateRoom = ({ session, guestUser, supabase }) => {
   const [roomName, setRoomName] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(4);
   const [initialChips, setInitialChips] = useState(500);
@@ -24,13 +25,17 @@ const CreateRoom = ({ session, supabase }) => {
       // Generate a unique room code for joining
       const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
       
+      // For guest users or authenticated users
+      const userId = session?.user?.id || `guest-${uuidv4()}`;
+      const username = session?.user?.user_metadata?.username || guestUser?.username || 'Guest';
+      
       // Insert the room record
       const { data: room, error: roomError } = await supabase
         .from('rooms')
         .insert([
           {
             name: roomName,
-            host_id: session.user.id,
+            host_id: userId,
             max_players: maxPlayers,
             initial_chips: initialChips,
             small_blind: smallBlind,
@@ -38,7 +43,8 @@ const CreateRoom = ({ session, supabase }) => {
             status: 'waiting',
             is_private: isPrivate,
             room_code: roomCode,
-            current_players: 1
+            current_players: 1,
+            host_name: username // Store the host name for guest users
           }
         ])
         .select()
@@ -52,15 +58,26 @@ const CreateRoom = ({ session, supabase }) => {
         .insert([
           {
             room_id: room.id,
-            user_id: session.user.id,
+            user_id: userId,
             chips: initialChips,
             seat_position: 0, // Host takes first position
             is_host: true,
-            status: 'waiting'
+            status: 'waiting',
+            username: username // Store username for guest users
           }
         ]);
 
       if (playerError) throw playerError;
+
+      // If guest user, store room info in session storage
+      if (guestUser) {
+        const guestRooms = JSON.parse(sessionStorage.getItem('guestRooms') || '[]');
+        guestRooms.push({
+          id: room.id,
+          isHost: true
+        });
+        sessionStorage.setItem('guestRooms', JSON.stringify(guestRooms));
+      }
 
       // Redirect to the lobby
       navigate(`/lobby/${room.id}`);
@@ -191,6 +208,12 @@ const CreateRoom = ({ session, supabase }) => {
                 Private Room (invite only)
               </label>
             </div>
+            
+            {guestUser && (
+              <div className="p-3 bg-yellow-900 bg-opacity-50 rounded text-sm text-yellow-200">
+                <b>Note:</b> You're playing as a guest. Your game rooms will only be available during this session.
+              </div>
+            )}
             
             <button
               type="submit"
