@@ -43,6 +43,9 @@ const GameRoom = ({ session, supabase }) => {
         setRoom(roomData);
         setBetAmount(roomData.small_blind);
 
+        // Determine user ID (regular or guest)
+        const userId = session?.user?.id || (guestUser ? `guest-${sessionStorage.getItem('guestId')}` : null);
+
         // Get players in the room
         const { data: playersData, error: playersError } = await supabase
           .from('room_players')
@@ -54,10 +57,23 @@ const GameRoom = ({ session, supabase }) => {
           .order('seat_position', { ascending: true });
 
         if (playersError) throw playersError;
-        setPlayers(playersData);
+        
+        // Process player data - for guest users, get username from metadata
+        const processedPlayers = playersData.map(player => {
+          // If player has metadata with username (guest), use that
+          if (player.metadata && player.metadata.username) {
+            return {
+              ...player,
+              profiles: { username: player.metadata.username }
+            };
+          }
+          return player;
+        });
+        
+        setPlayers(processedPlayers);
 
         // Find current user's player data
-        const userPlayer = playersData.find(player => player.user_id === session.user.id);
+        const userPlayer = processedPlayers.find(player => player.user_id === userId);
         if (userPlayer) {
           setCurrentUserPlayer(userPlayer);
           setIsHost(userPlayer.is_host);
