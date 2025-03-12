@@ -210,11 +210,30 @@ const Lobby = ({ session, guestUser, supabase }) => {
         .update({ status: 'in_progress' })
         .eq('id', roomId);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error("Error updating room status:", updateError);
+        throw updateError;
+      }
 
-      console.log("Initializing game state");
+      // Fetch a random question to use
+      console.log("Fetching a random question");
+      const { data: questionData, error: questionError } = await supabase
+        .from('questions')
+        .select('id')
+        .limit(1)
+        .single();
+        
+      if (questionError) {
+        console.error("Error fetching random question:", questionError);
+        // If no questions exist yet, proceed without a question ID
+        console.log("Continuing without a question ID");
+      }
+      
+      const questionId = questionData?.id || null;
+
+      console.log("Initializing game state with question ID:", questionId);
       // Initialize the game state
-      const { error: gameStateError } = await supabase
+      const { data: gameStateData, error: gameStateError } = await supabase
         .from('game_states')
         .insert([
           {
@@ -223,13 +242,19 @@ const Lobby = ({ session, guestUser, supabase }) => {
             pot: 0,
             current_bet: 0,
             current_player_index: 0,
-            current_question_id: null
+            current_question_id: questionId
           }
-        ]);
+        ])
+        .select();
 
-      if (gameStateError) throw gameStateError;
-
+      if (gameStateError) {
+        console.error("Error creating game state:", gameStateError);
+        throw gameStateError;
+      }
+      
+      console.log("Game state created:", gameStateData);
       console.log("Navigating to game");
+      
       // Navigate to game
       navigate(`/game/${roomId}`);
     } catch (error) {
