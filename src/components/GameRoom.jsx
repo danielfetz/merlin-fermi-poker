@@ -484,6 +484,18 @@ const GameRoom = ({ session, supabase, guestUser }) => {
           
           // Add system message for fold action
           await addSystemMessage(`${playerUsername} folds.`);
+          
+          // Get count of active players to check if this fold leaves only one player
+          const { data: activePlayers, error: countError } = await supabase
+            .from('room_players')
+            .select('id')
+            .eq('room_id', roomId)
+            .eq('folded', false);
+            
+          if (!countError && activePlayers.length === 1) {
+            console.log("Only one player remains after fold, will award pot");
+          }
+          
           break;
           
         case 'call':
@@ -579,6 +591,73 @@ const GameRoom = ({ session, supabase, guestUser }) => {
     }
   };
 
+  // Award pot to last remaining player when everyone else has folded
+  const awardPotToLastPlayer = async () => {
+    try {
+      console.log("Awarding pot to last player standing");
+      
+      // Get fresh data for accuracy
+      const { data: freshPlayers, error: playersError } = await supabase
+        .from('room_players')
+        .select('*')
+        .eq('room_id', roomId)
+        .order('seat_position', { ascending: true });
+        
+      if (playersError) throw playersError;
+      
+      // Find the last active player
+      const lastPlayer = freshPlayers.find(p => !p.folded);
+      if (!lastPlayer) return; // Should never happen
+      
+      // Get current game state to get the pot amount
+      const { data: currentGameState, error: gameStateError } = await supabase
+        .from('game_states')
+        .select('pot')
+        .eq('id', gameState.id)
+        .single();
+        
+      if (gameStateError) throw gameStateError;
+      
+      const pot = currentGameState.pot;
+      
+      // Get username for message
+      const playerUsername = players.find(p => p.id === lastPlayer.id)?.profiles?.username || 'Unknown Player';
+      
+      // Award pot to winner
+      await supabase
+        .from('room_players')
+        .update({ 
+          chips: lastPlayer.chips + pot,
+          games_won: (lastPlayer.games_won || 0) + 1
+        })
+        .eq('id', lastPlayer.id);
+        
+      // Update stats in profile if not a guest
+      if (!lastPlayer.metadata) {
+        await supabase
+          .from('profiles')
+          .update({ games_won: (lastPlayer.games_won || 0) + 1 })
+          .eq('id', lastPlayer.user_id);
+      }
+      
+      // Add system message about winner
+      await addSystemMessage(`${playerUsername} wins the pot of ${pot} by default! Everyone else folded.`);
+      
+      // Reset the pot
+      await supabase
+        .from('game_states')
+        .update({ pot: 0 })
+        .eq('id', gameState.id);
+        
+      // Skip to a new round
+      if (isHost) {
+        setTimeout(() => startNewRound(), 3000);
+      }
+    } catch (error) {
+      console.error('Error awarding pot to last player:', error);
+    }
+  };
+
   // Move to the next player in the betting round
   const moveToNextPlayer = async () => {
     console.log("moveToNextPlayer called");
@@ -600,10 +679,10 @@ const GameRoom = ({ session, supabase, guestUser }) => {
       const activePlayers = freshPlayers.filter(p => !p.folded);
       console.log("Active players:", activePlayers);
       
-      // If only one player remains, end the round
+      // If only one player remains, award pot and start new round
       if (activePlayers.length <= 1) {
-        console.log("Only one active player, ending round");
-        await moveToNextStage();
+        console.log("Only one active player, awarding pot");
+        await awardPotToLastPlayer();
         return;
       }
       
@@ -775,18 +854,20 @@ const GameRoom = ({ session, supabase, guestUser }) => {
           .from('room_players')
           .update({ 
             chips: winner.chips + gameState.pot,
-            games_won: winner.games_won + 1
+            games_won: (winner.games_won || 0) + 1
           })
           .eq('id', winner.id);
           
-        // Update stats in profile
-        await supabase
-          .from('profiles')
-          .update({ games_won: winner.profiles.games_won + 1 })
-          .eq('id', winner.user_id);
+        // Update stats in profile if not a guest
+        if (!winner.metadata) {
+          await supabase
+            .from('profiles')
+            .update({ games_won: (winner.profiles.games_won || 0) + 1 })
+            .eq('id', winner.user_id);
+        }
           
         // Add system message about winner
-        await addSystemMessage(`${winner.profiles.username} wins the pot of $${gameState.pot} by default! Everyone else folded.`);
+        await addSystemMessage(`${winner.profiles.username} wins the pot of ${gameState.pot} by default! Everyone else folded.`);
       } else {
         // Find player with closest answer
         let closestPlayer = null;
@@ -838,6 +919,8 @@ const GameRoom = ({ session, supabase, guestUser }) => {
   // Start a new round
   const startNewRound = async () => {
     try {
+      console.log("Starting a new round...");
+      
       // Reset player states
       await Promise.all(players.map(player =>
         supabase
