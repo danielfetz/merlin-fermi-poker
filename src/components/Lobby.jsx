@@ -28,6 +28,9 @@ const Lobby = ({ session, supabase }) => {
         if (roomError) throw roomError;
         setRoom(roomData);
 
+        // Determine user ID (regular or guest)
+        const userId = session?.user?.id || `guest-${sessionStorage.getItem('guestId')}`;
+
         // Get players in the room
         const { data: playersData, error: playersError } = await supabase
           .from('room_players')
@@ -39,10 +42,23 @@ const Lobby = ({ session, supabase }) => {
           .order('seat_position', { ascending: true });
 
         if (playersError) throw playersError;
-        setPlayers(playersData);
+        
+        // Process player data - for guest users, get username from metadata
+        const processedPlayers = playersData.map(player => {
+          // If player has metadata with username (guest), use that
+          if (player.metadata && player.metadata.username) {
+            return {
+              ...player,
+              profiles: { username: player.metadata.username }
+            };
+          }
+          return player;
+        });
+        
+        setPlayers(processedPlayers);
 
         // Check if current user is the host
-        const currentPlayer = playersData.find(player => player.user_id === session.user.id);
+        const currentPlayer = processedPlayers.find(player => player.user_id === userId);
         if (currentPlayer) {
           setIsHost(currentPlayer.is_host);
         } else {
