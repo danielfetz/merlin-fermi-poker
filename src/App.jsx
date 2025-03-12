@@ -18,8 +18,15 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [guestUser, setGuestUser] = useState(null);
 
   useEffect(() => {
+    // Check for guest user in session storage
+    const storedGuestUser = sessionStorage.getItem('guestUser');
+    if (storedGuestUser) {
+      setGuestUser(JSON.parse(storedGuestUser));
+    }
+
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -31,6 +38,11 @@ function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      // Clear guest user if we have a real session
+      if (session) {
+        sessionStorage.removeItem('guestUser');
+        setGuestUser(null);
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -40,37 +52,40 @@ function App() {
     return <div className="flex items-center justify-center h-screen">Loading...</div>;
   }
 
+  // Consider the user authenticated if they have a session OR are a guest
+  const isAuthenticated = session || guestUser;
+
   return (
     <Router>
       <div className="min-h-screen bg-gray-900 text-white">
         <Routes>
           <Route
             path="/"
-            element={session ? <Home session={session} supabase={supabase} /> : <Navigate to="/login" />}
+            element={isAuthenticated ? <Home session={session} guestUser={guestUser} supabase={supabase} /> : <Navigate to="/login" />}
           />
           <Route 
             path="/login" 
-            element={!session ? <Login supabase={supabase} /> : <Navigate to="/" />} 
+            element={!isAuthenticated ? <Login supabase={supabase} /> : <Navigate to="/" />} 
           />
           <Route 
             path="/register" 
-            element={!session ? <Register supabase={supabase} /> : <Navigate to="/" />} 
+            element={!isAuthenticated ? <Register supabase={supabase} /> : <Navigate to="/" />} 
           />
           <Route 
             path="/create-room" 
-            element={session ? <CreateRoom session={session} supabase={supabase} /> : <Navigate to="/login" />} 
+            element={isAuthenticated ? <CreateRoom session={session} guestUser={guestUser} supabase={supabase} /> : <Navigate to="/login" />} 
           />
           <Route 
             path="/join-room" 
-            element={session ? <JoinRoom session={session} supabase={supabase} /> : <Navigate to="/login" />} 
+            element={isAuthenticated ? <JoinRoom session={session} guestUser={guestUser} supabase={supabase} /> : <Navigate to="/login" />} 
           />
           <Route 
             path="/lobby/:roomId" 
-            element={session ? <Lobby session={session} supabase={supabase} /> : <Navigate to="/login" />} 
+            element={isAuthenticated ? <Lobby session={session} guestUser={guestUser} supabase={supabase} /> : <Navigate to="/login" />} 
           />
           <Route 
             path="/game/:roomId" 
-            element={session ? <GameRoom session={session} supabase={supabase} /> : <Navigate to="/login" />} 
+            element={isAuthenticated ? <GameRoom session={session} guestUser={guestUser} supabase={supabase} /> : <Navigate to="/login" />} 
           />
         </Routes>
       </div>
