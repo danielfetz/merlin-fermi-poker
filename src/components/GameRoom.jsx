@@ -34,7 +34,9 @@ const GameRoom = ({ session, supabase, guestUser }) => {
   // Add a system message to the chat
   const addSystemMessage = async (message) => {
     try {
-      const { error } = await supabase
+      console.log("Adding system message:", message);
+      
+      const { data, error } = await supabase
         .from('room_chat')
         .insert([
           {
@@ -43,10 +45,17 @@ const GameRoom = ({ session, supabase, guestUser }) => {
             message: message,
             is_system: true
           }
-        ]);
+        ])
+        .select();
         
       if (error) {
         console.error('Error adding system message:', error);
+      } else {
+        console.log("System message added:", data);
+        // Force-add to local chat state for immediate display
+        if (data && data[0]) {
+          setChat(prev => [...prev, {...data[0], profiles: null}]);
+        }
       }
     } catch (error) {
       console.error('Error adding system message:', error);
@@ -486,14 +495,15 @@ const GameRoom = ({ session, supabase, guestUser }) => {
           await addSystemMessage(`${playerUsername} folds.`);
           
           // Check if this fold leaves only one player remaining
-          const { data: remainingPlayers, error: countError } = await supabase
+          const { data: activePlayers, error: countError } = await supabase
             .from('room_players')
             .select('id')
             .eq('room_id', roomId)
             .eq('folded', false);
             
-          if (!countError && remainingPlayers && remainingPlayers.length === 1) {
+          if (!countError && activePlayers && activePlayers.length === 1) {
             console.log("Only one player remains after fold, immediately awarding pot");
+            // Award pot to last player immediately
             await awardPotToLastPlayer();
             return; // Exit early - the round is over
           }
@@ -1518,7 +1528,7 @@ const GameRoom = ({ session, supabase, guestUser }) => {
                 key={message.id} 
                 className={`p-2 rounded max-w-xs ${
                   message.is_system
-                    ? 'mx-auto bg-gray-600 text-gray-200 italic text-xs' 
+                    ? 'mx-auto bg-gray-600 text-gray-200 italic text-xs w-full text-center' 
                     : message.user_id === (session?.user?.id || sessionStorage.getItem('guestId'))
                       ? 'ml-auto bg-blue-700 text-white'
                       : 'bg-gray-700 text-white'
