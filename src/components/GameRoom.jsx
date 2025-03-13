@@ -485,17 +485,18 @@ const GameRoom = ({ session, supabase, guestUser }) => {
           // Add system message for fold action
           await addSystemMessage(`${playerUsername} folds.`);
           
-          // Get count of active players to check if this fold leaves only one player
-          const { data: activePlayers, error: countError } = await supabase
+          // Check if this fold leaves only one player remaining
+          const { data: remainingPlayers, error: countError } = await supabase
             .from('room_players')
             .select('id')
             .eq('room_id', roomId)
             .eq('folded', false);
             
-          if (!countError && activePlayers.length === 1) {
-            console.log("Only one player remains after fold, will award pot");
+          if (!countError && remainingPlayers && remainingPlayers.length === 1) {
+            console.log("Only one player remains after fold, immediately awarding pot");
+            await awardPotToLastPlayer();
+            return; // Exit early - the round is over
           }
-          
           break;
           
         case 'call':
@@ -921,8 +922,18 @@ const GameRoom = ({ session, supabase, guestUser }) => {
     try {
       console.log("Starting a new round...");
       
-      // Reset player states
-      await Promise.all(players.map(player =>
+      // Reset player states - get updated player list first
+      const { data: currentPlayers, error: playersError } = await supabase
+        .from('room_players')
+        .select('id')
+        .eq('room_id', roomId);
+        
+      if (playersError) throw playersError;
+      
+      console.log(`Resetting ${currentPlayers.length} players for new round`);
+      
+      // Reset all players' state
+      await Promise.all(currentPlayers.map(player =>
         supabase
           .from('room_players')
           .update({ 
@@ -934,57 +945,98 @@ const GameRoom = ({ session, supabase, guestUser }) => {
       ));
       
       // Select a new random question
+      const { data: questions, error: questionsError } = await supabase
+        .from('questions')
+        .select('id')
+        .eq('is_approved', true);
+        
+      if (questionsError) throw questionsError;
+      
+      if (questions.length === 0) {
+        console.error("No approved questions found");
+        await addSystemMessage("Error: No questions available. Please add questions to continue playing.");
+        return;
+      }
+      
+      // Select a random question from the available ones
+      const randomIndex = Math.floor(Math.random() * questions.length);
+      const randomQuestionId = questions[randomIndex].id;
+      
       const { data: randomQuestion, error: questionError } = await supabase
         .from('questions')
         .select('*')
-        .order('RANDOM()')
-        .limit(1)
+        .eq('id', randomQuestionId)
         .single();
 
       if (questionError) throw questionError;
       
+      // Re-fetch the player list to get the most current data
+      const { data: freshPlayers, error: freshPlayersError } = await supabase
+        .from('room_players')
+        .select('*')
+        .eq('room_id', roomId)
+        .order('seat_position', { ascending: true });
+        
+      if (freshPlayersError) throw freshPlayersError;
+      
+      if (freshPlayers.length < 2) {
+        console.error("Not enough players to start a round");
+        await addSystemMessage("Need at least 2 players to start a new round.");
+        return;
+      }
+      
+      
       // Set blinds for first two players
-      const sortedPlayers = [...players].sort((a, b) => a.seat_position - b.seat_position);
+      const smallBlindPos = 0; 
+      const bigBlindPos = 1;
       
-      // Small blind
-      await supabase
-        .from('room_players')
-        .update({ 
-          chips: sortedPlayers[0].chips - room.small_blind,
-          current_bet: room.small_blind
-        })
-        .eq('id', sortedPlayers[0].id);
-      
-      // Add system message for small blind
-      await addSystemMessage(`${sortedPlayers[0].profiles.username} posts small blind of $${room.small_blind}.`);
-      
-      // Big blind
-      await supabase
-        .from('room_players')
-        .update({ 
-          chips: sortedPlayers[1].chips - room.big_blind,
-          current_bet: room.big_blind
-        })
-        .eq('id', sortedPlayers[1].id);
+      if (freshPlayers.length >= 2) {
+        // Small blind
+        const smallBlindPlayer = freshPlayers[smallBlindPos];
+        await supabase
+          .from('room_players')
+          .update({ 
+            chips: Math.max(0, smallBlindPlayer.chips - room.small_blind),
+            current_bet: room.small_blind
+          })
+          .eq('id', smallBlindPlayer.id);
         
-      // Add system message for big blind
-      await addSystemMessage(`${sortedPlayers[1].profiles.username} posts big blind of $${room.big_blind}.`);
-      
-      // Update game state for new round
-      await supabase
-        .from('game_states')
-        .update({ 
-          current_stage: 'question',
-          pot: room.small_blind + room.big_blind,
-          current_bet: room.big_blind,
-          current_player_index: 2 % players.length,
-          current_question_id: randomQuestion.id,
-          timer_end: new Date(Date.now() + 60000).toISOString()
-        })
-        .eq('id', gameState.id);
+        // Add system message for small blind
+        const smallBlindUsername = players.find(p => p.id === smallBlindPlayer.id)?.profiles?.username || "Player";
+        await addSystemMessage(`${smallBlindUsername} posts small blind of ${room.small_blind}.`);
         
-      // Add system message for new round
-      await addSystemMessage("New round started! You have 60 seconds to answer the question.");
+        // Big blind
+        const bigBlindPlayer = freshPlayers[bigBlindPos];
+        await supabase
+          .from('room_players')
+          .update({ 
+            chips: Math.max(0, bigBlindPlayer.chips - room.big_blind),
+            current_bet: room.big_blind
+          })
+          .eq('id', bigBlindPlayer.id);
+          
+        // Add system message for big blind
+        const bigBlindUsername = players.find(p => p.id === bigBlindPlayer.id)?.profiles?.username || "Player";
+        await addSystemMessage(`${bigBlindUsername} posts big blind of ${room.big_blind}.`);
+        
+        // Update game state for new round - start with the player after the big blind
+        await supabase
+          .from('game_states')
+          .update({ 
+            current_stage: 'question',
+            pot: room.small_blind + room.big_blind,
+            current_bet: room.big_blind,
+            current_player_index: (bigBlindPos + 1) % freshPlayers.length,
+            current_question_id: randomQuestion.id,
+            timer_end: new Date(Date.now() + 60000).toISOString()
+          })
+          .eq('id', gameState.id);
+          
+        // Add system message for new round
+        await addSystemMessage("New round started! You have 60 seconds to answer the question.");
+      } else {
+        await addSystemMessage("Not enough players to start the game. Please wait for more players to join.");
+      }
     } catch (error) {
       console.error('Error starting new round:', error);
       setError('Failed to start new round');
